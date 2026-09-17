@@ -4,7 +4,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, Sparkles, Copy, Check, ArrowRight, Play, RefreshCw, 
   Tv, MonitorPlay, Image as ImageIcon, Upload, FileText, CheckCircle2,
-  Clock, Flame, Layers, ExternalLink, Sliders, AlertCircle, Settings
+  Clock, Flame, Layers, ExternalLink, Sliders, AlertCircle, Settings,
+  Zap, Bot, Send, Palette, Camera, X
 } from 'lucide-react';
 import { STYLE_ERAS, getStyleById } from '@/lib/stylesConfig';
 import { GuestPhoto, PhotoStatus, EraStyleId } from '@/lib/types';
@@ -12,7 +13,7 @@ import { StorageService } from '@/lib/storageService';
 import Link from 'next/link';
 
 export default function OperatorDashboard() {
-  const [activeTab, setActiveTab] = useState<'queue' | 'history' | 'prompts' | 'settings'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'prompts' | 'n8n' | 'settings'>('queue');
   const [photos, setPhotos] = useState<GuestPhoto[]>([]);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null);
@@ -21,8 +22,41 @@ export default function OperatorDashboard() {
   const [dragOver, setDragOver] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
 
+  // n8n Automation State
+  const [n8nWebhookUrl, setN8nWebhookUrl] = useState('');
+  const [autoDispatchN8n, setAutoDispatchN8n] = useState(false);
+  const [isDispatchingN8n, setIsDispatchingN8n] = useState(false);
+
+  // Direct Volunteer Photo Ingestion Modal
+  const [showDirectUploadModal, setShowDirectUploadModal] = useState(false);
+  const [directPhotoImg, setDirectPhotoImg] = useState<string | null>(null);
+  const [directGuestName, setDirectGuestName] = useState('');
+  const [directSelectedStyle, setDirectSelectedStyle] = useState<EraStyleId>('1980s');
+  const [isDirectSubmitting, setIsDirectSubmitting] = useState(false);
+
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const directFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load n8n settings from localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedUrl = localStorage.getItem('nexora_n8n_webhook_url');
+      if (savedUrl) setN8nWebhookUrl(savedUrl);
+
+      const savedAuto = localStorage.getItem('nexora_n8n_auto_dispatch');
+      if (savedAuto) setAutoDispatchN8n(savedAuto === 'true');
+    }
+  }, []);
+
+  const saveN8nSettings = (url: string, auto: boolean) => {
+    setN8nWebhookUrl(url);
+    setAutoDispatchN8n(auto);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nexora_n8n_webhook_url', url);
+      localStorage.setItem('nexora_n8n_auto_dispatch', String(auto));
+    }
+  };
 
   // Load photos and subscribe to live updates
   const refreshPhotos = async () => {
@@ -41,13 +75,18 @@ export default function OperatorDashboard() {
         showNotification(`New guest arrived: ${event.payload.guestName} (${event.payload.ticketNumber})`);
         refreshPhotos();
         setSelectedPhotoId(event.payload.id);
+
+        // Auto-dispatch to n8n if enabled
+        if (autoDispatchN8n && n8nWebhookUrl) {
+          triggerN8nDispatch(event.payload);
+        }
       } else {
         refreshPhotos();
       }
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [autoDispatchN8n, n8nWebhookUrl]);
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -56,6 +95,23 @@ export default function OperatorDashboard() {
 
   const selectedPhoto = photos.find(p => p.id === selectedPhotoId) || photos[0];
   const selectedEra = selectedPhoto ? getStyleById(selectedPhoto.styleId) : STYLE_ERAS[0];
+
+  // Helper: Volunteer changes the style / era on the fly
+  const handleChangeEra = async (newStyleId: EraStyleId) => {
+    if (!selectedPhoto) return;
+    try {
+      const updated = await StorageService.updatePhoto(selectedPhoto.id, {
+        styleId: newStyleId,
+        statusMessage: `Theme updated to ${getStyleById(newStyleId).name}`
+      });
+      if (updated) {
+        refreshPhotos();
+        showNotification(`Theme changed to ${getStyleById(newStyleId).name}! Prompt recalculated.`);
+      }
+    } catch (err) {
+      console.error('Error changing theme', err);
+    }
+  };
 
   // Helper: Copy Prompt for ChatGPT
   const handleCopyPrompt = async (promptText: string, id: string) => {
@@ -69,14 +125,12 @@ export default function OperatorDashboard() {
     }
   };
 
-  // Helper: Copy Raw Photo to OS Clipboard so operator can Cmd+V directly into ChatGPT!
+  // Helper: Copy Raw Photo to OS Clipboard
   const handleCopyPhoto = async (photoUrl: string, id: string) => {
     try {
-      // Fetch image data and convert to blob
       const res = await fetch(photoUrl);
       const blob = await res.blob();
       
-      // Ensure PNG format for ClipboardItem API compatibility
       let pngBlob = blob;
       if (blob.type !== 'image/png') {
         const img = new Image();
@@ -93,16 +147,13 @@ export default function OperatorDashboard() {
       }
 
       await navigator.clipboard.write([
-        new ClipboardItem({
-          'image/png': pngBlob,
-        }),
+        new ClipboardItem({ 'image/png': pngBlob }),
       ]);
       setCopiedPhotoId(id);
       showNotification('Image copied to clipboard! Press Cmd+V in ChatGPT.');
       setTimeout(() => setCopiedPhotoId(null), 2500);
     } catch (err) {
       console.warn('ClipboardItem failed, opening fallback download', err);
-      // Fallback: trigger download of the image
       const a = document.createElement('a');
       a.href = photoUrl;
       a.download = `nexora-${selectedPhoto?.ticketNumber || 'guest'}.jpg`;
@@ -117,12 +168,13 @@ export default function OperatorDashboard() {
     setIsProcessing(true);
 
     try {
-      // Apply official Nexora Watermark to the transformed image
       const watermarked = await StorageService.applyWatermark(dataUrl, selectedEra.name);
 
       await StorageService.updatePhoto(selectedPhoto.id, {
         transformedPhotoUrl: watermarked,
         status: 'ready',
+        progress: 100,
+        statusMessage: 'Transformation ready'
       });
 
       showNotification(`Transformed image linked & pushed to Live TV Display!`);
@@ -131,6 +183,58 @@ export default function OperatorDashboard() {
       console.error('Error processing output image', err);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // Trigger dispatch to n8n
+  const triggerN8nDispatch = async (targetPhoto = selectedPhoto) => {
+    if (!targetPhoto) return;
+    if (!n8nWebhookUrl) {
+      showNotification('Please enter your n8n Webhook URL in the n8n Tab first!');
+      setActiveTab('n8n');
+      return;
+    }
+
+    setIsDispatchingN8n(true);
+    const targetEra = getStyleById(targetPhoto.styleId);
+
+    // 1. Immediately start TV display radar loading animation
+    StorageService.broadcastEvent({
+      type: 'PHOTO_PROCESSING',
+      payload: {
+        id: targetPhoto.id,
+        progress: 35,
+        message: `n8n automation generating ${targetEra.name} era...`,
+      },
+    });
+
+    try {
+      const res = await fetch('/api/n8n/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          webhookUrl: n8nWebhookUrl.trim(),
+          photoId: targetPhoto.id,
+          ticketNumber: targetPhoto.ticketNumber,
+          guestName: targetPhoto.guestName,
+          styleId: targetPhoto.styleId,
+          styleName: targetEra.name,
+          rawPhotoUrl: targetPhoto.rawPhotoUrl,
+          prompt: targetEra.promptTemplate
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        showNotification(`⚡ Dispatched to n8n! Waiting for ChatGPT generation...`);
+        refreshPhotos();
+      } else {
+        showNotification(`n8n warning: ${data.error}`);
+      }
+    } catch (err: any) {
+      showNotification(`Failed to dispatch to n8n: ${err.message}`);
+    } finally {
+      setIsDispatchingN8n(false);
     }
   };
 
@@ -149,7 +253,7 @@ export default function OperatorDashboard() {
     }
   };
 
-  // Listen for Cmd+V / Ctrl+V clipboard paste directly in window
+  // Listen for Cmd+V clipboard paste directly in window
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
@@ -175,12 +279,11 @@ export default function OperatorDashboard() {
     return () => window.removeEventListener('paste', handlePaste);
   }, [selectedPhoto, selectedEra]);
 
-  // Fast prototype mock generation (uses the pre-crafted era demonstration)
+  // Fast prototype mock generation
   const handleSimulateTransform = async () => {
     if (!selectedPhoto) return;
     setIsProcessing(true);
 
-    // Step 1: Simulate loading animation on TV Display
     StorageService.broadcastEvent({
       type: 'PHOTO_PROCESSING',
       payload: {
@@ -190,7 +293,6 @@ export default function OperatorDashboard() {
       },
     });
 
-    // Step 2: Push the demo transformed image after 1.8s
     setTimeout(async () => {
       const demoImg = selectedEra.demoTransformed;
       await processOutputImage(demoImg);
@@ -198,7 +300,6 @@ export default function OperatorDashboard() {
     }, 1800);
   };
 
-  // Start animated TV loading without output image yet
   const handleStartTvLoading = () => {
     if (!selectedPhoto) return;
     StorageService.broadcastEvent({
@@ -212,7 +313,6 @@ export default function OperatorDashboard() {
     showNotification('TV Screen switched to Live Processing Animation!');
   };
 
-  // Force TV Screen to show current selected photo
   const handleForceDisplay = () => {
     if (!selectedPhoto) return;
     StorageService.broadcastEvent({
@@ -225,10 +325,37 @@ export default function OperatorDashboard() {
     showNotification('Sent current photo to TV Display view.');
   };
 
-  // Reset TV to idle attract mode
   const handleResetTv = () => {
     StorageService.broadcastEvent({ type: 'DISPLAY_RESET' });
     showNotification('TV Display returned to idle attract mode.');
+  };
+
+  // Direct Volunteer Photo Submission Handler
+  const handleDirectSubmit = async () => {
+    if (!directPhotoImg) return;
+    setIsDirectSubmitting(true);
+    try {
+      const created = await StorageService.createPhoto({
+        guestName: directGuestName.trim() || 'Counter Guest',
+        styleId: directSelectedStyle,
+        rawPhotoUrl: directPhotoImg,
+      });
+
+      showNotification(`Added ${created.ticketNumber} to queue!`);
+      setSelectedPhotoId(created.id);
+      setShowDirectUploadModal(false);
+      setDirectPhotoImg(null);
+      setDirectGuestName('');
+      refreshPhotos();
+
+      if (autoDispatchN8n && n8nWebhookUrl) {
+        triggerN8nDispatch(created);
+      }
+    } catch (err) {
+      console.error('Error creating photo', err);
+    } finally {
+      setIsDirectSubmitting(false);
+    }
   };
 
   return (
@@ -241,7 +368,120 @@ export default function OperatorDashboard() {
         </div>
       )}
 
-      {/* LEFT SIDEBAR (Modeled after LocalFlow screenshots) */}
+      {/* MODAL: DIRECT VOLUNTEER PHOTO INGESTION */}
+      {showDirectUploadModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="localflow-card max-w-lg w-full p-6 space-y-4 bg-white relative">
+            <button
+              onClick={() => setShowDirectUploadModal(false)}
+              className="absolute top-4 right-4 p-1 text-ink-500 hover:text-ink-900"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div>
+              <span className="localflow-badge-orange text-[10px] font-mono uppercase font-bold">
+                Counter Station
+              </span>
+              <h3 className="font-serif text-xl font-bold mt-1 text-ink-900">
+                Capture / Upload Guest at Stall
+              </h3>
+              <p className="text-xs text-ink-500 font-mono">
+                Take a photo directly at the desk or choose from files, and select the era style.
+              </p>
+            </div>
+
+            {/* Photo Selection */}
+            {directPhotoImg ? (
+              <div className="relative aspect-[4/3] w-full rounded-xl overflow-hidden border-2 border-ink-900 bg-ink-900">
+                <img src={directPhotoImg} alt="Preview" className="w-full h-full object-cover" />
+                <button
+                  onClick={() => setDirectPhotoImg(null)}
+                  className="absolute bottom-2 right-2 localflow-btn-secondary px-2.5 py-1 text-xs"
+                >
+                  Change Photo
+                </button>
+              </div>
+            ) : (
+              <div
+                onClick={() => directFileInputRef.current?.click()}
+                className="aspect-[4/3] w-full rounded-xl border-2 border-dashed border-ink-900/30 hover:border-terracotta bg-canvas/60 flex flex-col items-center justify-center cursor-pointer p-4"
+              >
+                <Camera className="w-8 h-8 text-terracotta mb-2" />
+                <p className="font-serif font-bold text-sm text-ink-900">Select or Capture Guest Photo</p>
+                <p className="text-xs text-ink-500 font-mono mt-1">Supports JPG, PNG, WEBP</p>
+              </div>
+            )}
+
+            <input
+              type="file"
+              ref={directFileInputRef}
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  const reader = new FileReader();
+                  reader.onload = (loadEvt) => setDirectPhotoImg(loadEvt.target?.result as string);
+                  reader.readAsDataURL(file);
+                }
+              }}
+            />
+
+            {/* Guest Name */}
+            <div>
+              <label className="block text-xs font-mono font-bold uppercase text-ink-600 mb-1">
+                Guest Name / Nickname
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Sam"
+                value={directGuestName}
+                onChange={(e) => setDirectGuestName(e.target.value)}
+                className="w-full text-sm font-semibold bg-canvas border border-ink-900/30 rounded-lg p-2.5 focus:outline-none focus:border-terracotta"
+              />
+            </div>
+
+            {/* Style Selector */}
+            <div>
+              <label className="block text-xs font-mono font-bold uppercase text-ink-600 mb-1.5 flex items-center gap-1.5">
+                <Palette className="w-3.5 h-3.5 text-terracotta" />
+                Select Transformation Theme:
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {STYLE_ERAS.map((era) => {
+                  const isSel = directSelectedStyle === era.id;
+                  return (
+                    <button
+                      key={era.id}
+                      type="button"
+                      onClick={() => setDirectSelectedStyle(era.id)}
+                      className={`p-2 rounded-lg border text-left text-xs font-mono transition-all ${
+                        isSel
+                          ? 'border-ink-900 bg-terracotta text-white font-bold shadow-brutal-sm'
+                          : 'border-ink-900/20 bg-canvas hover:border-ink-900/50 text-ink-800'
+                      }`}
+                    >
+                      {era.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <button
+              onClick={handleDirectSubmit}
+              disabled={!directPhotoImg || isDirectSubmitting}
+              className="w-full localflow-btn-primary py-3 text-sm flex items-center justify-center gap-2"
+            >
+              {isDirectSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              <span>Add to Queue & Dispatch</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* LEFT SIDEBAR (LocalFlow Styled) */}
       <aside className="w-full md:w-64 bg-canvas border-r-2 border-ink-900 flex flex-col justify-between p-4 flex-shrink-0">
         <div className="space-y-6">
           {/* Logo & Stall Brand */}
@@ -281,6 +521,23 @@ export default function OperatorDashboard() {
             </button>
 
             <button
+              onClick={() => setActiveTab('n8n')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border-2 transition-all ${
+                activeTab === 'n8n'
+                  ? 'bg-terracotta text-white border-ink-900 shadow-brutal-sm'
+                  : 'bg-transparent text-ink-700 border-transparent hover:bg-canvas-hover'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Bot className="w-4 h-4" />
+                <span className="font-semibold">n8n Automation</span>
+              </div>
+              {autoDispatchN8n && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+            </button>
+
+            <button
               onClick={() => setActiveTab('prompts')}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border-2 transition-all ${
                 activeTab === 'prompts'
@@ -307,52 +564,50 @@ export default function OperatorDashboard() {
         </div>
 
         {/* Sidebar Bottom Controls */}
-        <div className="space-y-3 pt-4 border-t-2 border-ink-900/10">
+        <div className="space-y-2.5 pt-4 border-t-2 border-ink-900/10">
+          <button
+            onClick={() => setShowDirectUploadModal(true)}
+            className="w-full localflow-btn-primary py-2.5 px-3 text-xs flex items-center justify-center gap-2 font-mono"
+          >
+            <Camera className="w-3.5 h-3.5" />
+            + Direct Capture at Desk
+          </button>
+
           <Link
             href="/display"
             target="_blank"
-            className="w-full localflow-btn-secondary py-2.5 px-3 text-xs flex items-center justify-center gap-2 font-mono"
+            className="w-full localflow-btn-secondary py-2 px-3 text-xs flex items-center justify-center gap-2 font-mono"
           >
             <Tv className="w-3.5 h-3.5 text-terracotta" />
             Open TV Display (Tab) ↗
           </Link>
 
-          <Link
-            href="/capture"
-            target="_blank"
-            className="w-full localflow-btn-secondary py-2 px-3 text-xs flex items-center justify-center gap-2 font-mono"
-          >
-            <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
-            Mobile Capture Portal ↗
-          </Link>
-
-          <div className="localflow-card-flat p-2.5 bg-canvas-card flex items-center justify-between text-xs">
+          <div className="localflow-card-flat p-2 bg-canvas-card flex items-center justify-between text-xs">
             <span className="flex items-center gap-1.5 font-mono text-[11px] text-ink-700">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              Stall Sync Ready
+              Supabase Realtime
             </span>
             <span className="localflow-key text-[10px]">ESC</span>
           </div>
         </div>
       </aside>
 
-      {/* MAIN WORKSPACE CONTENT */}
+      {/* MAIN WORKSPACE */}
       <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6 max-w-7xl">
-        {/* Header Bar */}
+        {/* Top Header */}
         <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b-2 border-ink-900/10">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="text-xs font-mono uppercase text-ink-500 font-bold">
                 GLC Stall Operator Station
               </span>
-              <span className="localflow-badge-green text-[10px]">Realtime Connected</span>
+              <span className="localflow-badge-green text-[10px]">Cloud Connected</span>
             </div>
             <h2 className="font-serif text-2xl md:text-3xl font-bold tracking-tight text-ink-900">
               Transformation Dispatch Desk
             </h2>
           </div>
 
-          {/* Quick TV Control Buttons */}
           <div className="flex items-center gap-2">
             <button
               onClick={handleForceDisplay}
@@ -373,13 +628,13 @@ export default function OperatorDashboard() {
           </div>
         </header>
 
-        {/* METRIC STRIP (Modeled after LocalFlow top cards) */}
+        {/* METRIC STRIP */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4">
           <div className="localflow-card p-3.5">
             <span className="text-[10px] font-mono uppercase font-bold text-ink-500 block">Total Guests</span>
             <div className="flex items-baseline gap-2 mt-1">
               <span className="font-serif text-3xl font-extrabold text-ink-900">{photos.length}</span>
-              <span className="localflow-badge-green text-[10px]">Today</span>
+              <span className="localflow-badge-green text-[10px]">Supabase</span>
             </div>
           </div>
 
@@ -404,19 +659,21 @@ export default function OperatorDashboard() {
           </div>
 
           <div className="localflow-card p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-ink-500 block">Active Preset</span>
+            <span className="text-[10px] font-mono uppercase font-bold text-ink-500 block">n8n Status</span>
             <div className="flex items-center gap-1.5 mt-2">
-              <span className="localflow-badge-orange text-xs font-mono font-bold">
-                {selectedEra.name}
+              <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full border ${
+                n8nWebhookUrl ? 'bg-emerald-50 text-emerald-700 border-emerald-600' : 'bg-amber-50 text-amber-800 border-amber-500'
+              }`}>
+                {n8nWebhookUrl ? (autoDispatchN8n ? '⚡ Auto-Active' : '✓ Webhook Set') : 'Manual Mode'}
               </span>
             </div>
           </div>
         </div>
 
-        {/* OPERATOR WORKFLOW SECTION */}
+        {/* WORKFLOW QUEUE TAB */}
         {activeTab === 'queue' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* INCOMING QUEUE LIST (LEFT COLUMN, 4 COLS) */}
+            {/* INCOMING QUEUE (4 COLS) */}
             <div className="lg:col-span-4 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-serif text-base font-bold text-ink-900 flex items-center gap-2">
@@ -425,13 +682,20 @@ export default function OperatorDashboard() {
                     {photos.length}
                   </span>
                 </h3>
-                <button
-                  onClick={refreshPhotos}
-                  className="text-xs font-mono text-ink-500 hover:text-ink-900 flex items-center gap-1"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  Refresh
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowDirectUploadModal(true)}
+                    className="text-xs font-mono text-terracotta font-bold hover:underline"
+                  >
+                    + Desk Capture
+                  </button>
+                  <button
+                    onClick={refreshPhotos}
+                    className="text-xs font-mono text-ink-500 hover:text-ink-900"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-2 max-h-[68vh] overflow-y-auto pr-1">
@@ -443,16 +707,15 @@ export default function OperatorDashboard() {
                     <div>
                       <p className="font-serif font-bold text-sm">Queue is Empty</p>
                       <p className="text-xs text-ink-500 mt-1">
-                        Scan the QR code on a mobile phone to capture the first stall portrait!
+                        Scan the QR code on a phone or click + Desk Capture to add the first portrait.
                       </p>
                     </div>
-                    <Link
-                      href="/capture"
-                      target="_blank"
-                      className="inline-block localflow-btn-primary px-3 py-1.5 text-xs font-mono"
+                    <button
+                      onClick={() => setShowDirectUploadModal(true)}
+                      className="localflow-btn-primary px-3 py-1.5 text-xs font-mono"
                     >
-                      Open Mobile Capture
-                    </Link>
+                      Capture at Counter
+                    </button>
                   </div>
                 ) : (
                   photos.map((photo) => {
@@ -485,9 +748,13 @@ export default function OperatorDashboard() {
                               <span className="localflow-badge-green text-[9px] font-mono">
                                 Ready
                               </span>
-                            ) : (
+                            ) : photo.status === 'processing' ? (
                               <span className="localflow-badge-orange text-[9px] font-mono animate-pulse">
-                                Waiting AI
+                                AI Working
+                              </span>
+                            ) : (
+                              <span className="localflow-badge-neutral text-[9px] font-mono">
+                                In Queue
                               </span>
                             )}
                           </div>
@@ -512,41 +779,87 @@ export default function OperatorDashboard() {
               </div>
             </div>
 
-            {/* ACTIVE WORKBENCH: DISPATCH TO CHATGPT & DROPZONE (8 COLS) */}
+            {/* ACTIVE WORKSTATION (8 COLS) */}
             <div className="lg:col-span-8 space-y-4">
               {selectedPhoto ? (
                 <div className="localflow-card p-5 space-y-5">
-                  {/* Item Header */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b-2 border-ink-900/10">
-                    <div className="flex items-center gap-3">
-                      <span className="localflow-key text-xs font-bold font-mono">
-                        {selectedPhoto.ticketNumber}
-                      </span>
-                      <div>
-                        <h4 className="font-serif text-lg font-bold leading-tight">
-                          {selectedPhoto.guestName}
-                        </h4>
-                        <span className="text-[11px] font-mono text-ink-500">
-                          Target Style: <strong className="text-terracotta">{selectedEra.name}</strong> ({selectedEra.eraLabel})
+                  {/* Top Bar with Ticket & Interactive Theme Switcher */}
+                  <div className="pb-3 border-b-2 border-ink-900/10 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <span className="localflow-key text-xs font-bold font-mono">
+                          {selectedPhoto.ticketNumber}
                         </span>
+                        <div>
+                          <h4 className="font-serif text-lg font-bold leading-tight">
+                            {selectedPhoto.guestName}
+                          </h4>
+                          <span className="text-[11px] font-mono text-ink-500">
+                            Current Theme: <strong className="text-terracotta">{selectedEra.name}</strong> ({selectedEra.eraLabel})
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* n8n Dispatch & Prototype Simulation Buttons */}
+                      <div className="flex items-center gap-2">
+                        {n8nWebhookUrl && (
+                          <button
+                            onClick={() => triggerN8nDispatch()}
+                            disabled={isDispatchingN8n}
+                            className="localflow-btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 font-mono shadow-brutal-sm"
+                            title="Dispatch photo and prompt to your n8n workflow"
+                          >
+                            <Zap className="w-3.5 h-3.5" />
+                            {isDispatchingN8n ? 'Dispatching...' : '⚡ Send to n8n'}
+                          </button>
+                        )}
+
+                        <button
+                          onClick={handleSimulateTransform}
+                          disabled={isProcessing}
+                          className="localflow-btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-mono text-terracotta border-terracotta hover:bg-terracotta-light"
+                          title="Test transformation in 2 seconds"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-terracotta" />
+                          {isProcessing ? 'Simulating...' : '1-Click Demo'}
+                        </button>
                       </div>
                     </div>
 
-                    {/* Prototype Fast Simulator */}
-                    <button
-                      onClick={handleSimulateTransform}
-                      disabled={isProcessing}
-                      className="localflow-btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-mono text-terracotta border-terracotta hover:bg-terracotta-light"
-                      title="Test the transformation flow immediately with built-in prototype asset"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-terracotta" />
-                      {isProcessing ? 'Simulating...' : '1-Click Demo Transform'}
-                    </button>
+                    {/* VOLUNTEER THEME SELECTOR PILLS */}
+                    <div className="bg-canvas p-2.5 rounded-xl border border-ink-900/20">
+                      <span className="text-[10px] font-mono uppercase font-bold text-ink-600 block mb-1.5 flex items-center gap-1">
+                        <Palette className="w-3 h-3 text-terracotta" />
+                        Volunteer Theme Switcher (Select or change era):
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {STYLE_ERAS.map((era) => {
+                          const isActive = selectedPhoto.styleId === era.id;
+                          return (
+                            <button
+                              key={era.id}
+                              onClick={() => handleChangeEra(era.id)}
+                              className={`text-xs font-mono px-2.5 py-1 rounded-lg border transition-all flex items-center gap-1.5 ${
+                                isActive
+                                  ? 'bg-terracotta text-white border-ink-900 font-bold shadow-brutal-sm ring-1 ring-ink-900'
+                                  : 'bg-white border-ink-900/30 text-ink-800 hover:border-terracotta'
+                              }`}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full"
+                                style={{ backgroundColor: isActive ? '#FFFFFF' : era.badgeColor }}
+                              />
+                              {era.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
 
                   {/* 3-STEP PIPELINE CARDS */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {/* STEP 1: COPY RAW PHOTO */}
+                    {/* STEP 1: RAW PHOTO */}
                     <div className="localflow-card-flat p-3.5 bg-white space-y-3 flex flex-col justify-between">
                       <div>
                         <div className="flex items-center justify-between mb-2">
@@ -582,14 +895,14 @@ export default function OperatorDashboard() {
                       </button>
                     </div>
 
-                    {/* STEP 2: COPY ENGINEERED PROMPT */}
+                    {/* STEP 2: RECALCULATED PROMPT */}
                     <div className="localflow-card-flat p-3.5 bg-white space-y-3 flex flex-col justify-between">
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <span className="localflow-badge-neutral text-[10px] font-mono font-bold">
                             Step 2
                           </span>
-                          <span className="text-[11px] font-mono text-ink-500">Prompt</span>
+                          <span className="text-[11px] font-mono text-ink-500">{selectedEra.name} Prompt</span>
                         </div>
 
                         <div className="bg-canvas p-2.5 rounded-lg border border-ink-900/20 text-[11px] font-mono text-ink-800 h-40 overflow-y-auto leading-relaxed select-all">
@@ -615,7 +928,7 @@ export default function OperatorDashboard() {
                       </button>
                     </div>
 
-                    {/* STEP 3: DROP / PASTE CHATGPT OUTPUT */}
+                    {/* STEP 3: RESULT OUTPUT */}
                     <div className="localflow-card-flat p-3.5 bg-white space-y-3 flex flex-col justify-between">
                       <div>
                         <div className="flex items-center justify-between mb-2">
@@ -698,20 +1011,6 @@ export default function OperatorDashboard() {
                       </div>
                     </div>
                   </div>
-
-                  {/* Workflow Instructions Note */}
-                  <div className="bg-canvas p-3 rounded-xl border border-ink-900/10 flex items-start gap-3">
-                    <AlertCircle className="w-4 h-4 text-terracotta flex-shrink-0 mt-0.5" />
-                    <div className="text-xs text-ink-700 leading-snug">
-                      <strong>How the Stall Operator Flow works:</strong>
-                      <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-ink-600 mt-1 font-mono">
-                        <li>Click <strong>Copy Photo</strong> (copies to clipboard) → Switch to ChatGPT & press <strong>Cmd+V</strong>.</li>
-                        <li>Click <strong>Copy Era Prompt</strong> → Paste into ChatGPT prompt input and send.</li>
-                        <li>Once ChatGPT finishes generation, copy the output image and press <strong>Cmd+V</strong> here (or drag-drop).</li>
-                        <li>The TV screen instantly transitions with the branded Nexora reveal animation!</li>
-                      </ol>
-                    </div>
-                  </div>
                 </div>
               ) : (
                 <div className="localflow-card p-12 text-center">
@@ -722,7 +1021,103 @@ export default function OperatorDashboard() {
           </div>
         )}
 
-        {/* STYLE PROMPTS LIBRARY TAB */}
+        {/* N8N AUTOMATION TAB */}
+        {activeTab === 'n8n' && (
+          <div className="space-y-5 max-w-3xl">
+            <div>
+              <div className="inline-flex items-center gap-1.5 localflow-badge-orange text-xs font-mono font-bold uppercase mb-1">
+                <Zap className="w-3.5 h-3.5" />
+                Automated AI Pipeline
+              </div>
+              <h3 className="font-serif text-2xl font-bold text-ink-900">
+                n8n & ChatGPT OAuth Automation
+              </h3>
+              <p className="text-xs text-ink-600 font-mono">
+                Connect your n8n instance so photos from the phone automatically trigger ChatGPT and return to the live screen without manual copying!
+              </p>
+            </div>
+
+            <div className="localflow-card p-5 space-y-4 bg-white">
+              <h4 className="font-serif text-base font-bold text-ink-900 border-b border-ink-900/10 pb-2 flex items-center gap-2">
+                <Bot className="w-4 h-4 text-terracotta" />
+                n8n Webhook Configuration
+              </h4>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block font-mono font-bold uppercase text-[10px] text-ink-500 mb-1">
+                    Your n8n Webhook URL (Production or Test URL)
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://your-n8n.com/webhook/nexora-transform or http://localhost:5678/webhook/nexora-transform"
+                    value={n8nWebhookUrl}
+                    onChange={(e) => saveN8nSettings(e.target.value, autoDispatchN8n)}
+                    className="w-full bg-canvas border border-ink-900/30 rounded-lg p-2.5 font-mono text-xs focus:outline-none focus:border-terracotta"
+                  />
+                  <p className="text-[11px] text-ink-500 font-mono mt-1">
+                    Nexora will send: <code className="localflow-key text-[10px]">{`{ photoId, rawPhotoUrl, prompt, callbackUrl }`}</code>
+                  </p>
+                </div>
+
+                {/* Auto-Dispatch Toggle */}
+                <div className="p-3.5 rounded-xl border border-ink-900/20 bg-canvas/40 flex items-center justify-between">
+                  <div>
+                    <span className="font-serif font-bold text-sm text-ink-900 block">
+                      Auto-Dispatch on Photo Arrival
+                    </span>
+                    <span className="text-xs text-ink-600 font-mono">
+                      Whenever a guest takes a photo, immediately fire the n8n webhook and start the TV screen radar.
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={autoDispatchN8n}
+                    onChange={(e) => saveN8nSettings(n8nWebhookUrl, e.target.checked)}
+                    className="w-5 h-5 accent-terracotta cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => triggerN8nDispatch()}
+                    disabled={!n8nWebhookUrl || isDispatchingN8n || !selectedPhoto}
+                    className="localflow-btn-primary px-4 py-2.5 text-xs flex items-center gap-2 font-mono"
+                  >
+                    <Zap className="w-4 h-4" />
+                    {isDispatchingN8n ? 'Dispatching to n8n...' : 'Test Send Selected Photo to n8n'}
+                  </button>
+
+                  <button
+                    onClick={() => showNotification('Settings saved successfully!')}
+                    className="localflow-btn-secondary px-4 py-2.5 text-xs font-mono"
+                  >
+                    Save Config
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Workflow File Details Card */}
+            <div className="localflow-card p-5 space-y-3 bg-[#FAF8F4]">
+              <h4 className="font-serif text-base font-bold text-ink-900 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-emerald-700" />
+                Importable n8n Template File
+              </h4>
+              <p className="text-xs text-ink-700">
+                A pre-built workflow JSON template has been created in your repository at:
+              </p>
+              <div className="p-2.5 rounded-lg bg-canvas border border-ink-900/20 font-mono text-xs text-terracotta font-bold">
+                n8n/nexora-chatgpt-workflow.json
+              </div>
+              <p className="text-xs text-ink-600">
+                Simply open your n8n dashboard → <strong>Workflows</strong> → <strong>Import from File</strong> → select that JSON file, and link your ChatGPT/OpenAI credentials!
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* STYLE PROMPTS TAB */}
         {activeTab === 'prompts' && (
           <div className="space-y-4">
             <div>
@@ -783,51 +1178,14 @@ export default function OperatorDashboard() {
           </div>
         )}
 
-        {/* STALL SETTINGS TAB (Modeled after LocalFlow Settings Screenshot) */}
+        {/* SETTINGS TAB */}
         {activeTab === 'settings' && (
           <div className="space-y-5 max-w-3xl">
             <div>
               <h3 className="font-serif text-xl font-bold">Stall Preferences & Backend</h3>
               <p className="text-xs text-ink-500 font-mono">
-                Configure your Supabase connection and display preferences.
+                Supabase connection is verified and active on project <code className="localflow-key text-[10px]">hjwgcfqwjsalpimggtbk</code>.
               </p>
-            </div>
-
-            <div className="localflow-card p-5 space-y-4">
-              <h4 className="font-serif text-base font-bold text-ink-900 border-b border-ink-900/10 pb-2">
-                Supabase Backend Configuration
-              </h4>
-              <p className="text-xs text-ink-600">
-                When you are ready to connect your production Supabase database, provide the URL and Anon key below or in <code className="localflow-key text-[11px]">.env.local</code>. Currently running on high-speed zero-config local realtime storage.
-              </p>
-
-              <div className="space-y-3 text-xs">
-                <div>
-                  <label className="block font-mono font-bold uppercase text-[10px] text-ink-500 mb-1">
-                    NEXT_PUBLIC_SUPABASE_URL
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="https://your-project.supabase.co"
-                    className="w-full bg-white border border-ink-900/30 rounded-lg p-2.5 font-mono text-xs focus:outline-none focus:border-terracotta"
-                    readOnly
-                    value={process.env.NEXT_PUBLIC_SUPABASE_URL || 'Local Synchronizer Active (Fallback Engine)'}
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-mono font-bold uppercase text-[10px] text-ink-500 mb-1">
-                    NEXT_PUBLIC_SUPABASE_ANON_KEY
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="eyJh..."
-                    className="w-full bg-white border border-ink-900/30 rounded-lg p-2.5 font-mono text-xs focus:outline-none focus:border-terracotta"
-                    readOnly
-                    value={process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? '••••••••••••••••' : 'Using Local Realtime Bus'}
-                  />
-                </div>
-              </div>
             </div>
 
             <div className="localflow-card p-5 space-y-3">
@@ -835,7 +1193,7 @@ export default function OperatorDashboard() {
                 Data Management
               </h4>
               <p className="text-xs text-ink-600">
-                Clear temporary queue and storage for testing a fresh stall session.
+                Clear local queue storage for testing a fresh stall session.
               </p>
               <button
                 onClick={() => {

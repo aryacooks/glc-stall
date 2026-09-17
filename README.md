@@ -44,11 +44,17 @@ Nexora is a web-based AI photo transformation platform built for live booth stal
 
 2. **💻 Volunteer / Operator Station (`/operator`)**
    - Live incoming queue of attendee photos.
-   - **One-Click Copy Photo**: Copies directly to the OS clipboard so you can press `Cmd+V` in ChatGPT.
-   - **One-Click Copy Prompt**: Formatted specifically for image-to-image styling.
-   - **Drop / Paste Output**: Drag and drop the AI image or press `Cmd+V` directly on the page.
+   - **Theme Selector & Override**: The volunteer can view the chosen style and switch the aesthetic era on the fly (Cyberpunk, 1980s Retro, Studio Ghibli, 2000s Y2K, 1920s Noir, Renaissance) before sending to AI.
+   - **Direct Counter Capture**: Volunteers can take photos or upload files directly from the desk and assign a theme immediately.
+   - **n8n Automation Station**: One-click **"⚡ Send to n8n"** button or toggle **"Auto-Dispatch"** to automatically send every incoming photo to your n8n workflow.
+   - **One-Click Copy Photo & Prompt**: Fallback manual mode to copy straight to OS clipboard for `Cmd+V` in ChatGPT.
    - **Auto-Watermarking**: Automatically attaches the official Nexora translucent brand bar and era badge.
    - **1-Click Prototype Demo**: Test the full transformation loop in 2 seconds without opening ChatGPT.
+
+4. **🤖 n8n Automated Pipeline (`/n8n`)**
+   - Ready-to-import template: `n8n/nexora-chatgpt-workflow.json`.
+   - Listens on `POST /webhook/nexora-transform`, feeds image and prompt into ChatGPT OAuth, and posts result back to `POST /api/webhook/n8n`.
+   - The TV display automatically transitions to the reveal screen when n8n finishes!
 
 3. **📺 Live TV Presentation Screen (`/display`)**
    - Fullscreen mode for stall TV/monitors.

@@ -1,0 +1,148 @@
+{
+  "name": "Nexora GLC Stall — ChatGPT AI Transformation Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nexora-transform",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Nexora Webhook Receiver",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "webhookId": "nexora-transform"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "photoId",
+              "value": "={{ $json.body.photoId }}"
+            },
+            {
+              "name": "ticketNumber",
+              "value": "={{ $json.body.ticketNumber }}"
+            },
+            {
+              "name": "guestName",
+              "value": "={{ $json.body.guestName }}"
+            },
+            {
+              "name": "styleName",
+              "value": "={{ $json.body.styleName }}"
+            },
+            {
+              "name": "rawPhotoUrl",
+              "value": "={{ $json.body.rawPhotoUrl }}"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $json.body.prompt }}"
+            },
+            {
+              "name": "callbackUrl",
+              "value": "={{ $json.body.callbackUrl }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-params",
+      "name": "Extract Stall Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "prompt": "={{ $json.prompt }} (Ref image: {{ $json.rawPhotoUrl }})",
+        "options": {
+          "size": "1024x1024",
+          "quality": "standard"
+        }
+      },
+      "id": "openai-image-gen",
+      "name": "ChatGPT / OpenAI Image Gen",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        720,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_OR_CHATGPT_CREDENTIAL_ID",
+          "name": "OpenAI / ChatGPT account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Extract Stall Parameters').item.json.callbackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"photoId\": \"{{ $('Extract Stall Parameters').item.json.photoId }}\",\n  \"transformedPhotoUrl\": \"{{ $json.data[0].url }}\"\n}",
+        "options": {}
+      },
+      "id": "callback-nexora",
+      "name": "Push Result Back to Nexora",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        960,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Nexora Webhook Receiver": {
+      "main": [
+        [
+          {
+            "node": "Extract Stall Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Stall Parameters": {
+      "main": [
+        [
+          {
+            "node": "ChatGPT / OpenAI Image Gen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ChatGPT / OpenAI Image Gen": {
+      "main": [
+        [
+          {
+            "node": "Push Result Back to Nexora",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
