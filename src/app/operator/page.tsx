@@ -5,10 +5,10 @@ import {
   Users, Sparkles, Copy, Check, ArrowRight, Play, RefreshCw, 
   Tv, MonitorPlay, Image as ImageIcon, Upload, FileText, CheckCircle2,
   Clock, Flame, Layers, ExternalLink, Sliders, AlertCircle, Settings,
-  Palette, Camera, X, Clipboard, ArrowDownRight, CornerDownLeft
+  Palette, Camera, X, Clipboard, Plus, Trash2
 } from 'lucide-react';
-import { STYLE_ERAS, getStyleById } from '@/lib/stylesConfig';
-import { GuestPhoto, PhotoStatus, EraStyleId } from '@/lib/types';
+import { getAllThemes, getStyleById, saveCustomTheme, deleteCustomTheme } from '@/lib/stylesConfig';
+import { GuestPhoto, PhotoStatus, EraStyleId, StyleEra } from '@/lib/types';
 import { StorageService } from '@/lib/storageService';
 import Link from 'next/link';
 
@@ -21,19 +21,30 @@ export default function OperatorDashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
+  const [themes, setThemes] = useState<StyleEra[]>([]);
+
+  // Add New Theme Form State
+  const [newThemeName, setNewThemeName] = useState('');
+  const [newThemeTagline, setNewThemeTagline] = useState('');
+  const [newThemePrompt, setNewThemePrompt] = useState('');
+  const [showAddThemeModal, setShowAddThemeModal] = useState(false);
 
   // Direct Desk Capture Modal
   const [showDirectUploadModal, setShowDirectUploadModal] = useState(false);
   const [directPhotoImg, setDirectPhotoImg] = useState<string | null>(null);
   const [directGuestName, setDirectGuestName] = useState('');
-  const [directSelectedStyle, setDirectSelectedStyle] = useState<EraStyleId>('1980s');
+  const [directSelectedStyle, setDirectSelectedStyle] = useState<string>('1980s');
   const [isDirectSubmitting, setIsDirectSubmitting] = useState(false);
 
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const directFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load photos and subscribe to live updates
+  // Load themes & photos
+  const loadThemesList = () => {
+    setThemes(getAllThemes());
+  };
+
   const refreshPhotos = async () => {
     const list = await StorageService.getAllPhotos();
     setPhotos(list);
@@ -43,7 +54,10 @@ export default function OperatorDashboard() {
   };
 
   useEffect(() => {
+    loadThemesList();
     refreshPhotos();
+
+    window.addEventListener('nexora_themes_updated', loadThemesList);
 
     const unsubscribe = StorageService.subscribe((event) => {
       if (event.type === 'PHOTO_QUEUED') {
@@ -55,7 +69,10 @@ export default function OperatorDashboard() {
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      window.removeEventListener('nexora_themes_updated', loadThemesList);
+      unsubscribe();
+    };
   }, []);
 
   const showNotification = (msg: string) => {
@@ -64,38 +81,38 @@ export default function OperatorDashboard() {
   };
 
   const selectedPhoto = photos.find(p => p.id === selectedPhotoId) || photos[0];
-  const selectedEra = selectedPhoto ? getStyleById(selectedPhoto.styleId) : STYLE_ERAS[0];
+  const selectedEra = selectedPhoto ? getStyleById(selectedPhoto.styleId) : (themes[0] || getAllThemes()[0]);
 
   // Volunteer changes theme on the fly
-  const handleChangeEra = async (newStyleId: EraStyleId) => {
+  const handleChangeEra = async (newStyleId: string) => {
     if (!selectedPhoto) return;
     try {
       const updated = await StorageService.updatePhoto(selectedPhoto.id, {
-        styleId: newStyleId,
-        statusMessage: `Theme changed to ${getStyleById(newStyleId).name}`
+        styleId: newStyleId as any,
+        statusMessage: `Theme set to ${getStyleById(newStyleId).name}`
       });
       if (updated) {
         refreshPhotos();
-        showNotification(`Theme updated to ${getStyleById(newStyleId).name}! Prompt ready.`);
+        showNotification(`Theme updated to ${getStyleById(newStyleId).name}! Matching prompt loaded.`);
       }
     } catch (err) {
       console.error('Error changing theme', err);
     }
   };
 
-  // Helper: Copy Prompt for ChatGPT
+  // 1-Click Copy Prompt for ChatGPT
   const handleCopyPrompt = async (promptText: string, id: string) => {
     try {
       await navigator.clipboard.writeText(promptText);
       setCopiedPromptId(id);
-      showNotification('Prompt copied to clipboard! Paste into ChatGPT.');
+      showNotification('Prompt copied to clipboard! Ready to paste into ChatGPT.');
       setTimeout(() => setCopiedPromptId(null), 2500);
     } catch (err) {
       console.error('Failed to copy prompt', err);
     }
   };
 
-  // Helper: Copy Raw Photo to OS Clipboard so operator can Cmd+V directly into ChatGPT!
+  // 1-Click Copy Raw Photo to OS Clipboard for Cmd+V in ChatGPT
   const handleCopyPhoto = async (photoUrl: string, id: string) => {
     try {
       const res = await fetch(photoUrl);
@@ -120,19 +137,19 @@ export default function OperatorDashboard() {
         new ClipboardItem({ 'image/png': pngBlob }),
       ]);
       setCopiedPhotoId(id);
-      showNotification('Image copied! Go to ChatGPT and press Cmd+V');
+      showNotification('Photo copied to clipboard! Switch to ChatGPT & press Cmd+V');
       setTimeout(() => setCopiedPhotoId(null), 2500);
     } catch (err) {
-      console.warn('ClipboardItem failed, opening fallback download', err);
+      console.warn('ClipboardItem write failed, fallback download', err);
       const a = document.createElement('a');
       a.href = photoUrl;
       a.download = `nexora-${selectedPhoto?.ticketNumber || 'guest'}.jpg`;
       a.click();
-      showNotification('Downloaded image file for ChatGPT.');
+      showNotification('Downloaded photo file for ChatGPT.');
     }
   };
 
-  // Process image from ChatGPT (Drop, File, or Cmd+V Paste)
+  // Handle image from ChatGPT (Drop, File, or Paste)
   const processOutputImage = async (dataUrl: string) => {
     if (!selectedPhoto) return;
     setIsProcessing(true);
@@ -143,11 +160,10 @@ export default function OperatorDashboard() {
       await StorageService.updatePhoto(selectedPhoto.id, {
         transformedPhotoUrl: watermarked,
         status: 'ready',
-        progress: 100,
-        statusMessage: 'Transformation complete'
+        statusMessage: 'Transformed image ready'
       });
 
-      showNotification(`Transformed image linked & pushed to Live TV Display!`);
+      showNotification(`New image linked! Click "Show Transition on TV" below.`);
       refreshPhotos();
     } catch (err) {
       console.error('Error processing output image', err);
@@ -155,6 +171,66 @@ export default function OperatorDashboard() {
       setIsProcessing(false);
     }
   };
+
+  // Dedicated "Paste from Clipboard" button
+  const handlePasteFromClipboardButton = async () => {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.read) {
+        showNotification('Please press Cmd+V / Ctrl+V to paste the image.');
+        return;
+      }
+
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find(type => type.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const dataUri = e.target?.result as string;
+            if (dataUri) {
+              processOutputImage(dataUri);
+            }
+          };
+          reader.readAsDataURL(blob);
+          return;
+        }
+      }
+      showNotification('No image found on clipboard. Copy image in ChatGPT first.');
+    } catch (err) {
+      console.warn('Clipboard read error:', err);
+      showNotification('Press Cmd+V / Ctrl+V to paste the image directly.');
+    }
+  };
+
+  // Listen for Cmd+V anywhere on window
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          const file = items[i].getAsFile();
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = (loadEvt) => {
+              const result = loadEvt.target?.result as string;
+              if (result) {
+                showNotification('Pasted image captured from ChatGPT!');
+                processOutputImage(result);
+              }
+            };
+            reader.readAsDataURL(file);
+            break;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [selectedPhoto, selectedEra]);
 
   // Drag & drop handlers
   const handleDrop = (e: React.DragEvent) => {
@@ -171,85 +247,66 @@ export default function OperatorDashboard() {
     }
   };
 
-  // Listen for Cmd+V clipboard paste anywhere on the page!
-  useEffect(() => {
-    const handlePaste = (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
+  // Trigger Falling Pixel Breakdown Transition on TV Screen!
+  const handleTriggerTransition = () => {
+    if (!selectedPhoto || !selectedPhoto.transformedPhotoUrl) {
+      showNotification('Please paste the new transformed image first!');
+      return;
+    }
 
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-          const file = items[i].getAsFile();
-          if (file) {
-            const reader = new FileReader();
-            reader.onload = (loadEvt) => {
-              const result = loadEvt.target?.result as string;
-              if (result) {
-                showNotification('Pasted image detected from ChatGPT!');
-                processOutputImage(result);
-              }
-            };
-            reader.readAsDataURL(file);
-            break;
-          }
-        }
-      }
-    };
+    StorageService.broadcastEvent({
+      type: 'PHOTO_TRANSFORMED',
+      payload: selectedPhoto,
+    });
 
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
-  }, [selectedPhoto, selectedEra]);
+    showNotification('✨ Transition triggered! Watch the pixels fall on the TV screen!');
+  };
 
-  // Fast prototype mock generation
+  // Fast prototype mock simulation
   const handleSimulateTransform = async () => {
     if (!selectedPhoto) return;
     setIsProcessing(true);
 
-    StorageService.broadcastEvent({
-      type: 'PHOTO_PROCESSING',
-      payload: {
-        id: selectedPhoto.id,
-        progress: 45,
-        message: `Synthesizing ${selectedEra.name} era aesthetics...`,
-      },
-    });
-
-    setTimeout(async () => {
-      const demoImg = selectedEra.demoTransformed;
-      await processOutputImage(demoImg);
-      setIsProcessing(false);
-    }, 1800);
+    const demoImg = selectedEra.demoTransformed;
+    await processOutputImage(demoImg);
+    setIsProcessing(false);
   };
 
-  // Start animated TV loading without output image yet
-  const handleStartTvLoading = () => {
-    if (!selectedPhoto) return;
-    StorageService.broadcastEvent({
-      type: 'PHOTO_PROCESSING',
-      payload: {
-        id: selectedPhoto.id,
-        progress: 30,
-        message: `Analyzing facial geometry for ${selectedEra.name}...`,
-      },
-    });
-    showNotification('TV Screen switched to Live Converting Pixelation!');
-  };
-
-  const handleForceDisplay = () => {
-    if (!selectedPhoto) return;
-    StorageService.broadcastEvent({
-      type: 'DISPLAY_FORCE_VIEW',
-      payload: {
-        photoId: selectedPhoto.id,
-        step: selectedPhoto.transformedPhotoUrl ? 'reveal' : 'loading',
-      },
-    });
-    showNotification('Sent current photo to TV Display view.');
-  };
-
+  // Reset TV to idle
   const handleResetTv = () => {
     StorageService.broadcastEvent({ type: 'DISPLAY_RESET' });
-    showNotification('TV Display returned to idle standby frame.');
+    showNotification('TV Display returned to standby frame.');
+  };
+
+  // Focus current photo on TV
+  const handleFocusTv = () => {
+    if (!selectedPhoto) return;
+    StorageService.broadcastEvent({
+      type: 'PHOTO_QUEUED',
+      payload: selectedPhoto,
+    });
+    showNotification('Sent current photo to TV display frame.');
+  };
+
+  // Save new custom theme
+  const handleSaveNewTheme = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newThemeName.trim() || !newThemePrompt.trim()) {
+      alert('Please provide a Theme Title and ChatGPT Prompt.');
+      return;
+    }
+
+    saveCustomTheme({
+      name: newThemeName,
+      tagline: newThemeTagline || 'Custom prompt style',
+      promptTemplate: newThemePrompt,
+    });
+
+    setNewThemeName('');
+    setNewThemeTagline('');
+    setNewThemePrompt('');
+    setShowAddThemeModal(false);
+    showNotification('Theme added! It is now selectable on mobile.');
   };
 
   // Direct Desk Photo Submission
@@ -259,7 +316,7 @@ export default function OperatorDashboard() {
     try {
       const created = await StorageService.createPhoto({
         guestName: directGuestName.trim() || 'Counter Guest',
-        styleId: directSelectedStyle,
+        styleId: directSelectedStyle as any,
         rawPhotoUrl: directPhotoImg,
       });
 
@@ -283,6 +340,83 @@ export default function OperatorDashboard() {
         <div className="fixed top-5 right-5 z-50 bg-ink-900 text-white px-4 py-2.5 rounded-xl border-2 border-white/20 shadow-brutal flex items-center gap-2.5 text-xs font-mono animate-bounce">
           <Sparkles className="w-4 h-4 text-terracotta" />
           {notification}
+        </div>
+      )}
+
+      {/* MODAL: ADD NEW THEME & PROMPT */}
+      {showAddThemeModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="localflow-card max-w-lg w-full p-6 space-y-4 bg-white relative">
+            <button
+              onClick={() => setShowAddThemeModal(false)}
+              className="absolute top-4 right-4 p-1 text-ink-500 hover:text-ink-900"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div>
+              <span className="localflow-badge-orange text-[10px] font-mono uppercase font-bold">
+                Theme Creator
+              </span>
+              <h3 className="font-serif text-xl font-bold mt-1 text-ink-900">
+                Add New Theme & Prompt
+              </h3>
+              <p className="text-xs text-ink-500 font-mono">
+                This theme title will appear on the visitor mobile upload page automatically!
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveNewTheme} className="space-y-3">
+              <div>
+                <label className="block text-xs font-mono font-bold uppercase text-ink-600 mb-1">
+                  Theme Title (e.g. "Cyberpunk 2077", "Anime Ninja", "1980s Disco")
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Vintage Polaroid"
+                  value={newThemeName}
+                  onChange={(e) => setNewThemeName(e.target.value)}
+                  className="w-full text-sm font-semibold bg-canvas border border-ink-900/30 rounded-lg p-2.5 focus:outline-none focus:border-terracotta"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono font-bold uppercase text-ink-600 mb-1">
+                  Short Tagline (e.g. "Warm film grain and faded pastel borders")
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Authentic 70s analog snapshot"
+                  value={newThemeTagline}
+                  onChange={(e) => setNewThemeTagline(e.target.value)}
+                  className="w-full text-sm font-semibold bg-canvas border border-ink-900/30 rounded-lg p-2.5 focus:outline-none focus:border-terracotta"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono font-bold uppercase text-ink-600 mb-1">
+                  ChatGPT Prompt Template
+                </label>
+                <textarea
+                  required
+                  rows={4}
+                  placeholder="Transform this portrait into an authentic... Keep facial features intact..."
+                  value={newThemePrompt}
+                  onChange={(e) => setNewThemePrompt(e.target.value)}
+                  className="w-full text-xs font-mono bg-canvas border border-ink-900/30 rounded-lg p-2.5 focus:outline-none focus:border-terracotta leading-relaxed"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full localflow-btn-primary py-3 text-sm flex items-center justify-center gap-2 font-mono"
+              >
+                <Check className="w-4 h-4" />
+                <span>Save Theme & Add to Mobile Menu</span>
+              </button>
+            </form>
+          </div>
         </div>
       )}
 
@@ -364,7 +498,7 @@ export default function OperatorDashboard() {
                 Select Transformation Theme:
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {STYLE_ERAS.map((era) => {
+                {themes.map((era) => {
                   const isSel = directSelectedStyle === era.id;
                   return (
                     <button
@@ -390,13 +524,13 @@ export default function OperatorDashboard() {
               className="w-full localflow-btn-primary py-3 text-sm flex items-center justify-center gap-2"
             >
               {isDirectSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              <span>Add to Queue & Dispatch</span>
+              <span>Add to Queue & Select</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* LEFT SIDEBAR (LocalFlow Styled) */}
+      {/* LEFT SIDEBAR */}
       <aside className="w-full md:w-64 bg-canvas border-r-2 border-ink-900 flex flex-col justify-between p-4 flex-shrink-0">
         <div className="space-y-6">
           <div className="flex items-center gap-3 pb-4 border-b-2 border-ink-900/10">
@@ -408,12 +542,11 @@ export default function OperatorDashboard() {
                 NEXORA
               </h1>
               <p className="text-[10px] font-mono uppercase tracking-widest text-ink-500 font-bold">
-                Operator Backstage
+                Operator Station
               </p>
             </div>
           </div>
 
-          {/* Navigation */}
           <nav className="space-y-1.5 font-medium text-sm">
             <button
               onClick={() => setActiveTab('queue')}
@@ -436,14 +569,19 @@ export default function OperatorDashboard() {
 
             <button
               onClick={() => setActiveTab('prompts')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border-2 transition-all ${
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border-2 transition-all ${
                 activeTab === 'prompts'
                   ? 'bg-terracotta text-white border-ink-900 shadow-brutal-sm'
                   : 'bg-transparent text-ink-700 border-transparent hover:bg-canvas-hover'
               }`}
             >
-              <FileText className="w-4 h-4" />
-              <span className="font-semibold">Style Prompts</span>
+              <div className="flex items-center gap-2.5">
+                <Palette className="w-4 h-4" />
+                <span className="font-semibold">Themes & Prompts</span>
+              </div>
+              <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-ink-900/10 text-ink-700">
+                {themes.length}
+              </span>
             </button>
 
             <button
@@ -460,7 +598,6 @@ export default function OperatorDashboard() {
           </nav>
         </div>
 
-        {/* Sidebar Bottom Controls */}
         <div className="space-y-2.5 pt-4 border-t-2 border-ink-900/10">
           <button
             onClick={() => setShowDirectUploadModal(true)}
@@ -476,29 +613,28 @@ export default function OperatorDashboard() {
             className="w-full localflow-btn-secondary py-2 px-3 text-xs flex items-center justify-center gap-2 font-mono"
           >
             <Tv className="w-3.5 h-3.5 text-terracotta" />
-            Open TV Display (Tab) ↗
+            Open TV Screen ↗
           </Link>
 
           <div className="localflow-card-flat p-2 bg-canvas-card flex items-center justify-between text-xs">
             <span className="flex items-center gap-1.5 font-mono text-[11px] text-ink-700">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              Fast Clipboard Active
+              Fast Paste Ready
             </span>
             <span className="localflow-key text-[10px]">Cmd+V</span>
           </div>
         </div>
       </aside>
 
-      {/* MAIN WORKSPACE */}
+      {/* MAIN CONTENT AREA */}
       <main className="flex-1 p-4 md:p-6 overflow-y-auto space-y-6 max-w-7xl">
-        {/* Top Header Bar */}
         <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b-2 border-ink-900/10">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="text-xs font-mono uppercase text-ink-500 font-bold">
                 GLC Stall Operator Station
               </span>
-              <span className="localflow-badge-green text-[10px]">Cloud Connected</span>
+              <span className="localflow-badge-green text-[10px]">Connected</span>
             </div>
             <h2 className="font-serif text-2xl md:text-3xl font-bold tracking-tight text-ink-900">
               Transformation Dispatch Desk
@@ -507,9 +643,9 @@ export default function OperatorDashboard() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={handleForceDisplay}
+              onClick={handleFocusTv}
               className="localflow-btn-secondary px-3 py-2 text-xs flex items-center gap-1.5 font-mono"
-              title="Push current photo to display screen"
+              title="Show current photo in the frame on the TV"
             >
               <MonitorPlay className="w-3.5 h-3.5 text-terracotta" />
               Focus on TV
@@ -524,46 +660,6 @@ export default function OperatorDashboard() {
             </button>
           </div>
         </header>
-
-        {/* METRIC STRIP */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4">
-          <div className="localflow-card p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-ink-500 block">Total Guests</span>
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="font-serif text-3xl font-extrabold text-ink-900">{photos.length}</span>
-              <span className="localflow-badge-green text-[10px]">Supabase</span>
-            </div>
-          </div>
-
-          <div className="localflow-card p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-ink-500 block">Queue Waiting</span>
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="font-serif text-3xl font-extrabold text-terracotta">
-                {photos.filter(p => p.status === 'queued').length}
-              </span>
-              <span className="text-xs text-ink-500 font-mono">awaiting AI</span>
-            </div>
-          </div>
-
-          <div className="localflow-card p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-ink-500 block">Completed</span>
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="font-serif text-3xl font-extrabold text-emerald-700">
-                {photos.filter(p => p.status === 'ready').length}
-              </span>
-              <span className="localflow-badge-neutral text-[10px]">Watermarked</span>
-            </div>
-          </div>
-
-          <div className="localflow-card p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-ink-500 block">Active Theme</span>
-            <div className="flex items-center gap-1.5 mt-2">
-              <span className="localflow-badge-orange text-xs font-mono font-bold">
-                {selectedEra.name}
-              </span>
-            </div>
-          </div>
-        </div>
 
         {/* WORKFLOW QUEUE TAB */}
         {activeTab === 'queue' && (
@@ -602,7 +698,7 @@ export default function OperatorDashboard() {
                     <div>
                       <p className="font-serif font-bold text-sm">Queue is Empty</p>
                       <p className="text-xs text-ink-500 mt-1">
-                        Scan the QR code on a phone or click + Desk Capture to add a portrait.
+                        Scan the QR code on a mobile phone to add a photo.
                       </p>
                     </div>
                     <button
@@ -639,17 +735,13 @@ export default function OperatorDashboard() {
                             <span className="font-mono text-xs font-bold text-ink-900 truncate">
                               {photo.ticketNumber}
                             </span>
-                            {photo.status === 'ready' ? (
+                            {photo.transformedPhotoUrl ? (
                               <span className="localflow-badge-green text-[9px] font-mono">
                                 Ready
                               </span>
-                            ) : photo.status === 'processing' ? (
-                              <span className="localflow-badge-orange text-[9px] font-mono animate-pulse">
-                                Converting
-                              </span>
                             ) : (
-                              <span className="localflow-badge-neutral text-[9px] font-mono">
-                                In Queue
+                              <span className="localflow-badge-orange text-[9px] font-mono animate-pulse">
+                                Waiting AI
                               </span>
                             )}
                           </div>
@@ -674,128 +766,125 @@ export default function OperatorDashboard() {
               </div>
             </div>
 
-            {/* ACTIVE WORKSTATION (8 COLS) */}
+            {/* ACTIVE WORKSTATION: SIDE-BY-SIDE OLD & NEW IMAGE (8 COLS) */}
             <div className="lg:col-span-8 space-y-4">
               {selectedPhoto ? (
-                <div className="localflow-card p-5 space-y-5">
-                  {/* Top Bar with Ticket & Interactive Theme Switcher */}
-                  <div className="pb-3 border-b-2 border-ink-900/10 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <span className="localflow-key text-xs font-bold font-mono">
-                          {selectedPhoto.ticketNumber}
+                <div className="localflow-card p-5 space-y-5 bg-white">
+                  {/* Header Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b-2 border-ink-900/10">
+                    <div className="flex items-center gap-3">
+                      <span className="localflow-key text-xs font-bold font-mono">
+                        {selectedPhoto.ticketNumber}
+                      </span>
+                      <div>
+                        <h4 className="font-serif text-lg font-bold leading-tight">
+                          {selectedPhoto.guestName}
+                        </h4>
+                        <span className="text-[11px] font-mono text-ink-500">
+                          Selected Theme: <strong className="text-terracotta">{selectedEra.name}</strong>
                         </span>
-                        <div>
-                          <h4 className="font-serif text-lg font-bold leading-tight">
-                            {selectedPhoto.guestName}
-                          </h4>
-                          <span className="text-[11px] font-mono text-ink-500">
-                            Target Era: <strong className="text-terracotta">{selectedEra.name}</strong> ({selectedEra.eraLabel})
-                          </span>
-                        </div>
                       </div>
-
-                      <button
-                        onClick={handleSimulateTransform}
-                        disabled={isProcessing}
-                        className="localflow-btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-mono text-terracotta border-terracotta hover:bg-terracotta-light"
-                        title="Simulate transformation in 2 seconds"
-                      >
-                        <Sparkles className="w-3.5 h-3.5 text-terracotta" />
-                        {isProcessing ? 'Simulating...' : '1-Click Demo Transform'}
-                      </button>
                     </div>
 
-                    {/* VOLUNTEER THEME SELECTOR PILLS */}
-                    <div className="bg-canvas p-3 rounded-xl border border-ink-900/20">
-                      <span className="text-[10px] font-mono uppercase font-bold text-ink-600 block mb-1.5 flex items-center gap-1">
-                        <Palette className="w-3.5 h-3.5 text-terracotta" />
-                        Volunteer Theme Switcher (Select or change era):
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {STYLE_ERAS.map((era) => {
-                          const isActive = selectedPhoto.styleId === era.id;
-                          return (
-                            <button
-                              key={era.id}
-                              onClick={() => handleChangeEra(era.id)}
-                              className={`text-xs font-mono px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${
-                                isActive
-                                  ? 'bg-terracotta text-white border-ink-900 font-bold shadow-brutal-sm ring-1 ring-ink-900'
-                                  : 'bg-white border-ink-900/30 text-ink-800 hover:border-terracotta'
-                              }`}
-                            >
-                              <span
-                                className="w-2 h-2 rounded-full"
-                                style={{ backgroundColor: isActive ? '#FFFFFF' : era.badgeColor }}
-                              />
-                              {era.name}
-                            </button>
-                          );
-                        })}
-                      </div>
+                    <button
+                      onClick={handleSimulateTransform}
+                      disabled={isProcessing}
+                      className="localflow-btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-mono text-terracotta border-terracotta hover:bg-terracotta-light"
+                      title="Simulate transformation in 2 seconds"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-terracotta" />
+                      {isProcessing ? 'Simulating...' : '1-Click Demo'}
+                    </button>
+                  </div>
+
+                  {/* THEME SELECTOR PILLS */}
+                  <div className="bg-canvas p-3 rounded-xl border border-ink-900/20">
+                    <span className="text-[10px] font-mono uppercase font-bold text-ink-600 block mb-1.5 flex items-center gap-1">
+                      <Palette className="w-3 h-3 text-terracotta" />
+                      Switch Theme Title (Updates ChatGPT prompt instantly):
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {themes.map((era) => {
+                        const isActive = selectedPhoto.styleId === era.id;
+                        return (
+                          <button
+                            key={era.id}
+                            onClick={() => handleChangeEra(era.id)}
+                            className={`text-xs font-mono px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${
+                              isActive
+                                ? 'bg-terracotta text-white border-ink-900 font-bold shadow-brutal-sm ring-1 ring-ink-900'
+                                : 'bg-white border-ink-900/30 text-ink-800 hover:border-terracotta'
+                            }`}
+                          >
+                            <span
+                              className="w-2 h-2 rounded-full"
+                              style={{ backgroundColor: isActive ? '#FFFFFF' : era.badgeColor }}
+                            />
+                            {era.name}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  {/* 3-STEP PIPELINE CARDS */}
+                  {/* SIDE-BY-SIDE: OLD IMAGE (LEFT), PROMPT (CENTER), NEW IMAGE (RIGHT) */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {/* STEP 1: RAW PHOTO */}
-                    <div className="localflow-card-flat p-3.5 bg-white space-y-3 flex flex-col justify-between">
+                    {/* LEFT: OLD IMAGE */}
+                    <div className="localflow-card-flat p-3.5 bg-canvas space-y-3 flex flex-col justify-between">
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <span className="localflow-badge-neutral text-[10px] font-mono font-bold">
-                            Step 1
+                            Old Image
                           </span>
                           <span className="text-[11px] font-mono text-ink-500">Original</span>
                         </div>
                         <div className="relative aspect-[3/4] w-full rounded-lg overflow-hidden border border-ink-900 bg-ink-900">
                           <img
                             src={selectedPhoto.rawPhotoUrl}
-                            alt="Guest Original"
+                            alt="Original"
                             className="w-full h-full object-cover"
                           />
                         </div>
                       </div>
 
                       <button
-                        onClick={() => {
-                          handleCopyPhoto(selectedPhoto.rawPhotoUrl, selectedPhoto.id);
-                          handleStartTvLoading();
-                        }}
-                        className="w-full localflow-btn-primary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5"
+                        onClick={() => handleCopyPhoto(selectedPhoto.rawPhotoUrl, selectedPhoto.id)}
+                        className="w-full localflow-btn-primary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5 font-mono"
                       >
                         {copiedPhotoId === selectedPhoto.id ? (
                           <>
                             <Check className="w-3.5 h-3.5 text-white" />
-                            Copied! Cmd+V in ChatGPT
+                            Copied! Press Cmd+V in ChatGPT
                           </>
                         ) : (
                           <>
                             <Copy className="w-3.5 h-3.5" />
-                            Copy Photo (Cmd+V)
+                            1. Copy Photo
                           </>
                         )}
                       </button>
                     </div>
 
-                    {/* STEP 2: RECALCULATED PROMPT */}
-                    <div className="localflow-card-flat p-3.5 bg-white space-y-3 flex flex-col justify-between">
+                    {/* CENTER: MATCHING PROMPT */}
+                    <div className="localflow-card-flat p-3.5 bg-canvas space-y-3 flex flex-col justify-between">
                       <div>
                         <div className="flex items-center justify-between mb-2">
-                          <span className="localflow-badge-neutral text-[10px] font-mono font-bold">
-                            Step 2
+                          <span className="localflow-badge-orange text-[10px] font-mono font-bold">
+                            Matching Prompt
                           </span>
-                          <span className="text-[11px] font-mono text-ink-500">{selectedEra.name} Prompt</span>
+                          <span className="text-[11px] font-mono text-ink-500 truncate max-w-[90px]">
+                            {selectedEra.name}
+                          </span>
                         </div>
 
-                        <div className="bg-canvas p-2.5 rounded-lg border border-ink-900/20 text-[11px] font-mono text-ink-800 h-40 overflow-y-auto leading-relaxed select-all">
+                        <div className="bg-white p-2.5 rounded-lg border border-ink-900/20 text-[11px] font-mono text-ink-800 h-44 overflow-y-auto leading-relaxed select-all">
                           {selectedEra.promptTemplate}
                         </div>
                       </div>
 
                       <button
                         onClick={() => handleCopyPrompt(selectedEra.promptTemplate, selectedPhoto.id)}
-                        className="w-full localflow-btn-secondary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5"
+                        className="w-full localflow-btn-secondary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5 font-mono"
                       >
                         {copiedPromptId === selectedPhoto.id ? (
                           <>
@@ -805,20 +894,20 @@ export default function OperatorDashboard() {
                         ) : (
                           <>
                             <FileText className="w-3.5 h-3.5" />
-                            Copy Era Prompt
+                            2. Copy Prompt
                           </>
                         )}
                       </button>
                     </div>
 
-                    {/* STEP 3: PASTE RESULT (NO DOWNLOAD NEEDED!) */}
-                    <div className="localflow-card-flat p-3.5 bg-white space-y-3 flex flex-col justify-between">
+                    {/* RIGHT: NEW IMAGE & PASTE CLIPBOARD */}
+                    <div className="localflow-card-flat p-3.5 bg-canvas space-y-3 flex flex-col justify-between">
                       <div>
                         <div className="flex items-center justify-between mb-2">
                           <span className="localflow-badge-green text-[10px] font-mono font-bold">
-                            Step 3
+                            New Image
                           </span>
-                          <span className="text-[11px] font-mono text-ink-500">ChatGPT Output</span>
+                          <span className="text-[11px] font-mono text-ink-500">Transformed</span>
                         </div>
 
                         {selectedPhoto.transformedPhotoUrl ? (
@@ -829,7 +918,7 @@ export default function OperatorDashboard() {
                               className="w-full h-full object-cover"
                             />
                             <div className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">
-                              ✓ Watermarked
+                              ✓ Ready
                             </div>
                           </div>
                         ) : (
@@ -838,24 +927,43 @@ export default function OperatorDashboard() {
                             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                             onDragLeave={() => setDragOver(false)}
                             onDrop={handleDrop}
-                            onClick={() => fileInputRef.current?.click()}
+                            onClick={handlePasteFromClipboardButton}
                             className={`aspect-[3/4] w-full rounded-lg border-2 border-dashed flex flex-col items-center justify-center p-3 text-center cursor-pointer transition-all ${
                               dragOver
                                 ? 'border-terracotta bg-terracotta-light/30 scale-102'
-                                : 'border-ink-900/30 hover:border-terracotta bg-canvas/40'
+                                : 'border-ink-900/30 hover:border-terracotta bg-white'
                             }`}
                           >
-                            <div className="w-10 h-10 rounded-full bg-white border-2 border-ink-900 flex items-center justify-center mb-2 shadow-brutal-sm">
+                            <div className="w-10 h-10 rounded-full bg-canvas border-2 border-ink-900 flex items-center justify-center mb-2 shadow-brutal-sm">
                               <Clipboard className="w-5 h-5 text-terracotta" />
                             </div>
                             <p className="font-serif font-bold text-xs text-ink-900">
-                              Press <strong className="text-terracotta">Cmd+V</strong> to Paste
+                              Click or Press <strong className="text-terracotta">Cmd+V</strong>
                             </p>
                             <p className="text-[10px] font-mono text-ink-500 mt-1 leading-tight">
-                              Copy image from ChatGPT & paste here! No download needed.
+                              Copy image in ChatGPT, then paste right here!
                             </p>
                           </div>
                         )}
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handlePasteFromClipboardButton}
+                          className="flex-1 localflow-btn-secondary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5 font-mono"
+                          title="Paste image directly from clipboard"
+                        >
+                          <Clipboard className="w-3.5 h-3.5 text-terracotta" />
+                          Paste Clipboard
+                        </button>
+
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="localflow-btn-secondary p-2 text-xs flex items-center justify-center"
+                          title="Upload file from computer"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                        </button>
                       </div>
 
                       <input
@@ -875,44 +983,31 @@ export default function OperatorDashboard() {
                           }
                         }}
                       />
-
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleStartTvLoading}
-                          className="flex-1 localflow-btn-secondary py-2 text-xs flex items-center justify-center gap-1 font-mono"
-                          title="Start pixelated converting animation on TV screen"
-                        >
-                          <Play className="w-3 h-3 text-terracotta" />
-                          Start TV Loading
-                        </button>
-
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="localflow-btn-secondary p-2 text-xs flex items-center justify-center"
-                          title="Upload file from disk"
-                        >
-                          <Upload className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
                     </div>
                   </div>
 
-                  {/* Operator Fast Guide Note */}
-                  <div className="bg-canvas p-3 rounded-xl border border-ink-900/10 flex items-start gap-3">
-                    <AlertCircle className="w-4 h-4 text-terracotta flex-shrink-0 mt-0.5" />
-                    <div className="text-xs text-ink-700 leading-snug">
-                      <strong>Fast 10-Second Stall Workflow:</strong>
-                      <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-ink-600 mt-1 font-mono">
-                        <li>Click <strong>Copy Photo</strong> → Switch to ChatGPT tab and press <strong>Cmd+V</strong>.</li>
-                        <li>Click <strong>Copy Era Prompt</strong> → Paste into ChatGPT prompt input and send.</li>
-                        <li>Once ChatGPT creates the image: <strong>Right-click → Copy Image</strong> (or press Cmd+C).</li>
-                        <li>Switch back to this tab and press <strong>Cmd+V</strong> anywhere! The TV screen instantly transitions with the reveal animation!</li>
-                      </ol>
-                    </div>
+                  {/* GIANT PRIMARY BUTTON: SHOW TRANSITION ON TV */}
+                  <div className="pt-2">
+                    <button
+                      onClick={handleTriggerTransition}
+                      disabled={!selectedPhoto.transformedPhotoUrl}
+                      className={`w-full py-3.5 px-4 rounded-xl border-2 border-ink-900 font-bold font-mono text-sm flex items-center justify-center gap-2 shadow-brutal transition-all ${
+                        selectedPhoto.transformedPhotoUrl
+                          ? 'bg-terracotta text-white hover:bg-terracotta-hover cursor-pointer active:translate-x-0.5 active:translate-y-0.5'
+                          : 'bg-canvas text-ink-400 border-ink-900/30 cursor-not-allowed'
+                      }`}
+                    >
+                      <Sparkles className="w-5 h-5 text-amber-300" />
+                      <span>✨ Show Transition on TV Screen</span>
+                      <ArrowRight className="w-5 h-5" />
+                    </button>
+                    <p className="text-center text-[11px] font-mono text-ink-500 mt-2">
+                      Breaks original photo into falling pixel bits and reveals the new transformed image on the TV screen
+                    </p>
                   </div>
                 </div>
               ) : (
-                <div className="localflow-card p-12 text-center">
+                <div className="localflow-card p-12 text-center bg-white">
                   <p className="font-serif text-lg font-bold">Select a photo from the queue to start</p>
                 </div>
               )}
@@ -920,19 +1015,29 @@ export default function OperatorDashboard() {
           </div>
         )}
 
-        {/* STYLE PROMPTS TAB */}
+        {/* THEMES & PROMPTS MANAGER TAB */}
         {activeTab === 'prompts' && (
-          <div className="space-y-4">
-            <div>
-              <h3 className="font-serif text-xl font-bold">Curated Era Prompts</h3>
-              <p className="text-xs text-ink-500 font-mono">
-                Engineered prompts used to instruct ChatGPT Plus for each aesthetic era.
-              </p>
+          <div className="space-y-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-serif text-2xl font-bold">Themes & Custom Prompts Manager</h3>
+                <p className="text-xs text-ink-500 font-mono">
+                  All active themes appear dynamically on the mobile upload screen for visitors to choose.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setShowAddThemeModal(true)}
+                className="localflow-btn-primary px-4 py-2 text-xs flex items-center gap-1.5 font-mono shadow-brutal-sm"
+              >
+                <Plus className="w-4 h-4" />
+                Add New Theme & Prompt
+              </button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {STYLE_ERAS.map((era) => (
-                <div key={era.id} className="localflow-card p-4 space-y-3 flex flex-col justify-between">
+              {themes.map((era) => (
+                <div key={era.id} className="localflow-card p-4 space-y-3 flex flex-col justify-between bg-white">
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <span
@@ -945,13 +1050,19 @@ export default function OperatorDashboard() {
                       >
                         {era.name}
                       </span>
-                      <span className="text-xs font-serif text-ink-500 italic">
-                        {era.eraLabel}
-                      </span>
+                      {era.id.startsWith('custom_') && (
+                        <button
+                          onClick={() => deleteCustomTheme(era.id)}
+                          className="text-ink-400 hover:text-rose-600 p-1"
+                          title="Delete this custom theme"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
 
                     <p className="text-xs text-ink-700 font-medium mb-3">
-                      {era.description}
+                      {era.tagline}
                     </p>
 
                     <div className="bg-canvas p-3 rounded-lg border border-ink-900/20 text-xs font-mono text-ink-800 max-h-36 overflow-y-auto leading-relaxed select-all">
@@ -987,11 +1098,11 @@ export default function OperatorDashboard() {
             <div>
               <h3 className="font-serif text-xl font-bold">Stall Preferences & Backend</h3>
               <p className="text-xs text-ink-500 font-mono">
-                Supabase connection is verified and active on project <code className="localflow-key text-[10px]">hjwgcfqwjsalpimggtbk</code>.
+                Supabase database is connected on project <code className="localflow-key text-[10px]">hjwgcfqwjsalpimggtbk</code>.
               </p>
             </div>
 
-            <div className="localflow-card p-5 space-y-3">
+            <div className="localflow-card p-5 space-y-3 bg-white">
               <h4 className="font-serif text-base font-bold text-ink-900 border-b border-ink-900/10 pb-2">
                 Data Management
               </h4>

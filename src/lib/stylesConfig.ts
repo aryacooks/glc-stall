@@ -1,6 +1,5 @@
 import { StyleEra } from './types';
 
-// Helper to create distinctive SVG graphics for each era's prototype demo
 function createEraSvg(title: string, subtitle: string, bgGradient: string, accentGlow: string, iconType: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 750" width="600" height="750">
     <defs>
@@ -18,58 +17,39 @@ function createEraSvg(title: string, subtitle: string, bgGradient: string, accen
     <rect width="600" height="750" fill="url(#bg)" />
     <circle cx="300" cy="320" r="280" fill="url(#glow)" />
     
-    <!-- Stylized silhouette & character backdrop -->
     <g transform="translate(300, 360)">
-      <!-- Head and shoulders silhouette -->
       <path d="M-90,120 C-90,40 -60,0 0,0 C60,0 90,40 90,120 C90,170 140,240 180,320 L-180,320 C-140,240 -90,170 -90,120 Z" fill="#151515" opacity="0.85" />
       <circle cx="0" cy="-50" r="85" fill="#222222" />
-      <!-- Sunglasses / visor / features according to type -->
       ${iconType === 'cyberpunk' ? `
         <rect x="-65" y="-60" width="130" height="24" rx="6" fill="#00F0FF" opacity="0.9" />
         <line x1="-150" y1="-50" x2="150" y2="-50" stroke="#FF007A" stroke-width="3" opacity="0.6" />
         <circle cx="0" cy="-48" r="4" fill="#FFFFFF" />
       ` : iconType === '1980s' ? `
-        <!-- Aviator sunglasses -->
         <path d="M-55,-55 C-35,-55 -30,-40 -20,-40 C-10,-40 -5,-55 15,-55 C35,-55 55,-40 55,-25 C55,-10 35, -5 15,-5 C-5,-5 -15,-20 -20,-20 C-25,-20 -35,-5 -55,-5 C-75,-5 -95,-20 -95,-35 Z" fill="#F59E0B" opacity="0.9" transform="translate(20, -10)" />
         <path d="M-300,180 L300,180" stroke="#EC4899" stroke-width="4" opacity="0.5" />
-        <path d="M-300,210 L300,210" stroke="#EC4899" stroke-width="3" opacity="0.4" />
       ` : iconType === 'ghibli' ? `
-        <!-- Anime soft eyes -->
         <ellipse cx="-30" cy="-50" rx="14" ry="18" fill="#FFFFFF" />
         <circle cx="-28" cy="-48" r="9" fill="#1E3A8A" />
-        <circle cx="-25" cy="-52" r="3" fill="#FFFFFF" />
         <ellipse cx="30" cy="-50" rx="14" ry="18" fill="#FFFFFF" />
         <circle cx="28" cy="-48" r="9" fill="#1E3A8A" />
-        <circle cx="25" cy="-52" r="3" fill="#FFFFFF" />
-        <path d="M-15,-20 Q0,-10 15,-20" stroke="#D97706" stroke-width="3" fill="none" stroke-linecap="round" />
       ` : `
-        <!-- Classic portrait visor -->
         <rect x="-50" y="-55" width="100" height="20" rx="10" fill="#E2E8F0" opacity="0.7" />
       `}
     </g>
 
-    <!-- Overlay texture -->
     <rect width="600" height="750" filter="url(#grain)" />
 
-    <!-- Nexora Watermark Brand Card -->
     <g transform="translate(40, 640)">
       <rect width="520" height="75" rx="14" fill="#0A0A0A" opacity="0.88" stroke="#333333" stroke-width="1.5" />
       <text x="24" y="36" font-family="system-ui, sans-serif" font-weight="900" font-size="20" letter-spacing="3" fill="#FFFFFF">NEXORA</text>
       <text x="24" y="56" font-family="system-ui, sans-serif" font-weight="500" font-size="12" letter-spacing="1" fill="#A1A1AA">SAME YOU. DIFFERENT ERA.</text>
       <text x="496" y="44" text-anchor="end" font-family="system-ui, sans-serif" font-weight="700" font-size="14" letter-spacing="2" fill="#D96E3D">${title.toUpperCase()}</text>
     </g>
-    
-    <!-- Top badge -->
-    <g transform="translate(40, 40)">
-      <rect width="180" height="34" rx="17" fill="#18181B" opacity="0.85" stroke="#3F3F46" stroke-width="1" />
-      <circle cx="20" cy="17" r="5" fill="#10B981" />
-      <text x="36" y="22" font-family="system-ui, sans-serif" font-weight="600" font-size="12" fill="#F4F4F5">${subtitle}</text>
-    </g>
   </svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-export const STYLE_ERAS: StyleEra[] = [
+export const DEFAULT_STYLE_ERAS: StyleEra[] = [
   {
     id: '1980s',
     name: '1980s Retro',
@@ -150,6 +130,82 @@ export const STYLE_ERAS: StyleEra[] = [
   }
 ];
 
+export const STYLE_ERAS = DEFAULT_STYLE_ERAS;
+
+const CUSTOM_THEMES_KEY = 'nexora_custom_themes_v1';
+
+// Get all active themes (defaults + user added)
+export function getAllThemes(): StyleEra[] {
+  if (typeof window === 'undefined') return DEFAULT_STYLE_ERAS;
+  try {
+    const saved = localStorage.getItem(CUSTOM_THEMES_KEY);
+    if (saved) {
+      const custom: StyleEra[] = JSON.parse(saved);
+      return [...DEFAULT_STYLE_ERAS, ...custom];
+    }
+  } catch (e) {
+    console.warn('Failed to load custom themes from localStorage', e);
+  }
+  return DEFAULT_STYLE_ERAS;
+}
+
+// Add and save a new theme
+export function saveCustomTheme(theme: {
+  name: string;
+  eraLabel?: string;
+  tagline?: string;
+  promptTemplate: string;
+  badgeColor?: string;
+}): StyleEra {
+  const id = `custom_${theme.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${Date.now().toString(36)}`;
+  const badgeColor = theme.badgeColor || '#D96E3D';
+  const newEra: StyleEra = {
+    id: id as any,
+    name: theme.name.trim(),
+    eraLabel: theme.eraLabel?.trim() || 'Custom Aesthetic',
+    tagline: theme.tagline?.trim() || 'Custom AI prompt transformation',
+    badgeColor: badgeColor,
+    accentColor: badgeColor,
+    borderColor: badgeColor,
+    promptTemplate: theme.promptTemplate.trim(),
+    description: theme.tagline?.trim() || 'Custom community prompt style.',
+    samplePlaceholder: createEraSvg(theme.name, 'Custom Theme', '<stop offset="0%" stop-color="#27272A" /><stop offset="100%" stop-color="#18181B" />', '<stop offset="0%" stop-color="#52525B" stop-opacity="0.8" /><stop offset="100%" stop-color="#18181B" stop-opacity="0" />', 'default'),
+    demoTransformed: createEraSvg(theme.name, 'Custom Edition', '<stop offset="0%" stop-color="#18181B" /><stop offset="50%" stop-color="#3F3F46" /><stop offset="100%" stop-color="#D96E3D" />', '<stop offset="0%" stop-color="#D96E3D" stop-opacity="0.8" /><stop offset="100%" stop-color="#18181B" stop-opacity="0" />', 'default')
+  };
+
+  if (typeof window !== 'undefined') {
+    try {
+      const current = localStorage.getItem(CUSTOM_THEMES_KEY);
+      const list: StyleEra[] = current ? JSON.parse(current) : [];
+      list.push(newEra);
+      localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(list));
+      window.dispatchEvent(new CustomEvent('nexora_themes_updated'));
+    } catch (e) {
+      console.error('Error saving custom theme', e);
+    }
+  }
+
+  return newEra;
+}
+
+// Delete custom theme
+export function deleteCustomTheme(id: string) {
+  if (typeof window !== 'undefined') {
+    try {
+      const current = localStorage.getItem(CUSTOM_THEMES_KEY);
+      if (current) {
+        const list: StyleEra[] = JSON.parse(current);
+        const filtered = list.filter(t => t.id !== id);
+        localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(filtered));
+        window.dispatchEvent(new CustomEvent('nexora_themes_updated'));
+      }
+    } catch (e) {
+      console.error('Error deleting custom theme', e);
+    }
+  }
+}
+
 export function getStyleById(id: string): StyleEra {
-  return STYLE_ERAS.find(s => s.id === id) || STYLE_ERAS[0];
+  const all = getAllThemes();
+  return all.find(s => s.id === id) || all[0];
 }

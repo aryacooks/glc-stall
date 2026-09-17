@@ -8,27 +8,41 @@ import {
 } from 'lucide-react';
 import QRCodeLib from 'qrcode';
 import confetti from 'canvas-confetti';
-import { STYLE_ERAS, getStyleById } from '@/lib/stylesConfig';
-import { GuestPhoto, RealtimeEvent } from '@/lib/types';
+import { getAllThemes, getStyleById, DEFAULT_STYLE_ERAS } from '@/lib/stylesConfig';
+import { GuestPhoto, RealtimeEvent, StyleEra } from '@/lib/types';
 import { StorageService } from '@/lib/storageService';
 
-type DisplayPhase = 'idle' | 'loading' | 'reveal';
+type DisplayPhase = 'idle' | 'loaded' | 'transitioning' | 'reveal';
+
+interface PixelParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  color: string;
+  delay: number;
+  alpha: number;
+  rotation: number;
+  vRot: number;
+}
 
 export default function DisplayPage() {
   const [phase, setPhase] = useState<DisplayPhase>('idle');
   const [activePhoto, setActivePhoto] = useState<GuestPhoto | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [loadingMessage, setLoadingMessage] = useState('Transforming portrait...');
-  const [sliderPos, setSliderPos] = useState(100); // 100 = full transformed
+  const [sliderPos, setSliderPos] = useState(100);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [pixelScale, setPixelScale] = useState(16); // Lower = more pixelated
+  const [themes, setThemes] = useState<StyleEra[]>([]);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameRef = useRef<number | null>(null);
+  const particleCanvasRef = useRef<HTMLCanvasElement>(null);
+  const animFrameIdRef = useRef<number | null>(null);
 
-  // Generate QR code for mobile capture
+  // Load themes & generate QR code
   useEffect(() => {
+    const list = getAllThemes();
+    setThemes(list);
+
     if (typeof window !== 'undefined') {
       const captureUrl = `${window.location.origin}/capture`;
       QRCodeLib.toDataURL(captureUrl, {
@@ -42,125 +56,175 @@ export default function DisplayPage() {
     }
   }, []);
 
-  // Listen to realtime sync events
+  // Listen to realtime events
   useEffect(() => {
     const handleEvent = (event: RealtimeEvent) => {
       if (event.type === 'PHOTO_QUEUED') {
         setActivePhoto(event.payload);
-        setPhase('loading');
-        setProgress(20);
-        setLoadingMessage(`New portrait received! Synthesizing ${getStyleById(event.payload.styleId).name}...`);
+        setPhase('loaded');
       } else if (event.type === 'PHOTO_PROCESSING') {
-        setProgress(event.payload.progress);
-        setLoadingMessage(event.payload.message);
-        setPhase('loading');
+        // Operator working
+        if (activePhoto?.id === event.payload.id || !activePhoto) {
+          StorageService.getAllPhotos().then((list) => {
+            const found = list.find(p => p.id === event.payload.id);
+            if (found) {
+              setActivePhoto(found);
+              setPhase('loaded');
+            }
+          });
+        }
       } else if (event.type === 'PHOTO_TRANSFORMED') {
         setActivePhoto(event.payload);
-        triggerRevealSequence(event.payload);
+        startPixelBreakdownTransition(event.payload);
       } else if (event.type === 'DISPLAY_FORCE_VIEW') {
         StorageService.getAllPhotos().then((list) => {
           const found = list.find(p => p.id === event.payload.photoId);
           if (found) {
             setActivePhoto(found);
             if (event.payload.step === 'reveal' && found.transformedPhotoUrl) {
-              triggerRevealSequence(found);
+              startPixelBreakdownTransition(found);
             } else {
-              setPhase('loading');
-              setProgress(55);
-              setLoadingMessage(`Synthesizing ${getStyleById(found.styleId).name}...`);
+              setPhase('loaded');
             }
           }
         });
       } else if (event.type === 'DISPLAY_RESET') {
+        if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
         setPhase('idle');
+        setActivePhoto(null);
       }
     };
 
     const unsubscribe = StorageService.subscribe(handleEvent);
     return () => unsubscribe();
-  }, []);
+  }, [activePhoto]);
 
-  // Pixelation animation during loading phase
-  useEffect(() => {
-    if (phase !== 'loading' || !activePhoto?.rawPhotoUrl) return;
+  // FALLING PIXEL BREAKDOWN TRANSITION
+  const startPixelBreakdownTransition = (photo: GuestPhoto) => {
+    if (!photo.rawPhotoUrl) {
+      setPhase('reveal');
+      return;
+    }
 
-    let currentProgress = progress || 25;
-    const interval = setInterval(() => {
-      currentProgress = (currentProgress + 1) % 100;
-      // Oscillate pixelation blockiness between 8 and 32 pixels
-      const blockiness = Math.floor(12 + Math.sin(Date.now() / 350) * 10);
-      setPixelScale(blockiness);
-      renderPixelatedImage(blockiness);
-    }, 80);
+    setPhase('transitioning');
+    const canvas = particleCanvasRef.current;
+    if (!canvas) {
+      setPhase('reveal');
+      return;
+    }
 
-    return () => clearInterval(interval);
-  }, [phase, activePhoto]);
-
-  // Render pixelated preview onto canvas
-  const renderPixelatedImage = (blockSize: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas || !activePhoto?.rawPhotoUrl) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) {
+      setPhase('reveal');
+      return;
+    }
 
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
-      const w = canvas.width;
-      const h = canvas.height;
+      const width = canvas.width;
+      const height = canvas.height;
 
-      // Draw small offscreen
-      const smallW = Math.max(12, Math.floor(w / blockSize));
-      const smallH = Math.max(16, Math.floor(h / blockSize));
+      // Draw original image onto canvas to sample pixel colors
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
 
-      const offscreen = document.createElement('canvas');
-      offscreen.width = smallW;
-      offscreen.height = smallH;
-      const offCtx = offscreen.getContext('2d');
-      if (!offCtx) return;
+      // Extract image pixels
+      const imgData = ctx.getImageData(0, 0, width, height);
+      const data = imgData.data;
 
-      offCtx.drawImage(img, 0, 0, smallW, smallH);
+      // Create grid of pixel blocks
+      const blockSize = 10; // 10x10 pixel blocks
+      const particles: PixelParticle[] = [];
 
-      // Scale back up without smoothing for chunky retro pixelation
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(offscreen, 0, 0, smallW, smallH, 0, 0, w, h);
+      for (let y = 0; y < height; y += blockSize) {
+        for (let x = 0; x < width; x += blockSize) {
+          const index = (y * width + x) * 4;
+          const r = data[index];
+          const g = data[index + 1];
+          const b = data[index + 2];
+          const a = data[index + 3];
 
-      // Overlay slight scanlines and tint
-      ctx.fillStyle = 'rgba(217, 110, 61, 0.12)';
-      ctx.fillRect(0, 0, w, h);
-    };
-    img.src = activePhoto.rawPhotoUrl;
-  };
+          if (a > 20) {
+            // Ripple delay from top to bottom with slight radial wave
+            const distFromTop = y / height;
+            const distFromCenter = Math.abs(x - width / 2) / (width / 2);
+            const delay = distFromTop * 30 + distFromCenter * 15;
 
-  // Reveal Sequence with before/after wipe & confetti
-  const triggerRevealSequence = (photo: GuestPhoto) => {
-    setPhase('reveal');
-    setProgress(100);
-    setSliderPos(0);
-
-    try {
-      confetti({
-        particleCount: 65,
-        spread: 70,
-        origin: { y: 0.65 },
-        colors: ['#D96E3D', '#E06D3B', '#1E1E1E', '#10B981', '#F59E0B']
-      });
-    } catch {
-      // safe ignore
-    }
-
-    // Animate split wipe from 0% to 100%
-    let current = 0;
-    const interval = setInterval(() => {
-      current += 2.5;
-      if (current >= 100) {
-        setSliderPos(100);
-        clearInterval(interval);
-      } else {
-        setSliderPos(current);
+            particles.push({
+              x,
+              y,
+              vx: (Math.random() - 0.5) * 4.5,
+              vy: -Math.random() * 2.5, // slight initial pop upward
+              size: blockSize + 0.5,
+              color: `rgb(${r},${g},${b})`,
+              delay,
+              alpha: 1,
+              rotation: 0,
+              vRot: (Math.random() - 0.5) * 0.15,
+            });
+          }
+        }
       }
-    }, 25);
+
+      // Physics loop
+      let frameCount = 0;
+      const gravity = 0.42;
+
+      const animate = () => {
+        frameCount++;
+        ctx.clearRect(0, 0, width, height);
+
+        let activeCount = 0;
+
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+
+          if (frameCount > p.delay) {
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += gravity; // Gravity pull
+            p.rotation += p.vRot;
+            p.alpha -= 0.012; // Gradual dissolution fade
+          }
+
+          if (p.alpha > 0.01 && p.y < height + 80) {
+            activeCount++;
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, p.alpha);
+            ctx.translate(p.x + p.size / 2, p.y + p.size / 2);
+            ctx.rotate(p.rotation);
+            ctx.fillStyle = p.color;
+            ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+            ctx.restore();
+          }
+        }
+
+        // When 85% of particles have fallen off, trigger reveal
+        if (activeCount > 30 && frameCount < 180) {
+          animFrameIdRef.current = requestAnimationFrame(animate);
+        } else {
+          ctx.clearRect(0, 0, width, height);
+          setPhase('reveal');
+          setSliderPos(100);
+
+          try {
+            confetti({
+              particleCount: 75,
+              spread: 80,
+              origin: { y: 0.65 },
+              colors: ['#D96E3D', '#E06D3B', '#1E1E1E', '#10B981', '#F59E0B']
+            });
+          } catch {
+            // safe ignore
+          }
+        }
+      };
+
+      animate();
+    };
+
+    img.src = photo.rawPhotoUrl;
   };
 
   const toggleFullscreen = () => {
@@ -171,7 +235,9 @@ export default function DisplayPage() {
     }
   };
 
-  // Prototype Demo for Testing
+  const currentEra = activePhoto ? getStyleById(activePhoto.styleId) : (themes[0] || DEFAULT_STYLE_ERAS[0]);
+
+  // Prototype fast test
   const runPrototypeDemo = (eraId: string) => {
     const era = getStyleById(eraId);
     const mockGuest: GuestPhoto = {
@@ -187,29 +253,12 @@ export default function DisplayPage() {
     };
 
     setActivePhoto(mockGuest);
-    setPhase('loading');
-    setProgress(15);
-    setLoadingMessage(`Converting into ${era.name} era...`);
-
-    let p = 15;
-    const loadTimer = setInterval(() => {
-      p += 25;
-      if (p >= 95) {
-        clearInterval(loadTimer);
-        setTimeout(() => {
-          triggerRevealSequence(mockGuest);
-        }, 500);
-      } else {
-        setProgress(p);
-      }
-    }, 450);
+    startPixelBreakdownTransition(mockGuest);
   };
-
-  const currentEra = activePhoto ? getStyleById(activePhoto.styleId) : STYLE_ERAS[0];
 
   return (
     <div className="h-screen w-screen bg-[#F4F0E6] text-[#1E1E1E] flex flex-col justify-between overflow-hidden select-none font-sans relative">
-      {/* SOFT TEXTURED WALLPAPER / GALLERY BACKDROP */}
+      {/* SOFT GALLERY WALLPAPER TEXTURE */}
       <div 
         className="absolute inset-0 pointer-events-none opacity-40"
         style={{
@@ -221,8 +270,8 @@ export default function DisplayPage() {
         }}
       />
 
-      {/* TOP CLEAN GALLERY BAR */}
-      <header className="relative z-20 flex items-center justify-between px-8 py-5 border-b-2 border-[#1E1E1E]/10 bg-[#FAF8F4]/80 backdrop-blur-md">
+      {/* TOP HEADER */}
+      <header className="relative z-20 flex items-center justify-between px-8 py-5 border-b-2 border-[#1E1E1E]/10 bg-[#FAF8F4]/85 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-terracotta text-white font-serif font-black text-lg flex items-center justify-center border-2 border-[#1E1E1E] shadow-brutal-sm">
             N
@@ -240,14 +289,13 @@ export default function DisplayPage() {
           </div>
         </div>
 
-        {/* Status Badge & Fullscreen */}
         <div className="flex items-center gap-3">
           <div className="px-3 py-1 rounded-full border-2 border-[#1E1E1E] bg-[#FAF8F4] text-xs font-mono font-bold flex items-center gap-2 shadow-brutal-sm">
             <span className={`w-2 h-2 rounded-full ${
-              phase === 'idle' ? 'bg-emerald-500 animate-pulse' : 'bg-terracotta animate-ping'
+              phase === 'idle' ? 'bg-emerald-500 animate-pulse' : phase === 'transitioning' ? 'bg-terracotta animate-ping' : 'bg-terracotta'
             }`} />
             <span>
-              {phase === 'idle' ? 'STANDBY: WAITING FOR GUEST' : phase === 'loading' ? 'CONVERTING PHOTO' : 'PORTRAIT REVEAL'}
+              {phase === 'idle' ? 'WAITING FOR GUEST' : phase === 'loaded' ? 'PHOTO QUEUED' : phase === 'transitioning' ? 'TRANSFORMING REALITY...' : 'TRANSFORMATION REVEAL'}
             </span>
           </div>
 
@@ -261,27 +309,22 @@ export default function DisplayPage() {
         </div>
       </header>
 
-      {/* CENTER VIEWPORT: THE WALL-HANGING ART GALLERY FRAME */}
+      {/* CENTER EXHIBITION AREA */}
       <main className="relative z-10 flex-1 flex items-center justify-center p-6 max-h-[82vh]">
-        {/* PHASE 1: IDLE / CUTE EMPTY HANGING FRAME */}
+        {/* PHASE 1: IDLE / NO PHOTO LOADED */}
         {phase === 'idle' && (
           <div className="w-full max-w-5xl flex flex-col md:flex-row items-center justify-center gap-10 md:gap-14 animate-fadeIn">
-            {/* THE WALL-HANGING PICTURE FRAME */}
+            {/* Hanging Picture Frame */}
             <div className="relative flex flex-col items-center">
-              {/* Hanging Wire and Peg */}
               <div className="w-4 h-4 rounded-full bg-[#3D3D3D] border-2 border-[#1E1E1E] shadow-sm mb-1 z-10" />
               <div 
                 className="w-40 h-8 border-t-2 border-r-2 border-l-2 border-[#1E1E1E]/40 pointer-events-none -mb-3 rotate-180" 
                 style={{ clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)' }}
               />
 
-              {/* The Art Frame */}
               <div className="w-72 md:w-80 aspect-[3/4] bg-[#FAF8F4] rounded-3xl border-4 border-[#1E1E1E] p-4 shadow-[8px_12px_0px_#1E1E1E] flex flex-col justify-between relative overflow-hidden group">
-                {/* Inner Mat Border */}
                 <div className="w-full h-full rounded-2xl border-2 border-dashed border-[#1E1E1E]/20 bg-[#F5F2EB] flex flex-col items-center justify-center p-6 text-center space-y-4">
-                  {/* Cute empty portrait avatar illustration */}
                   <div className="w-24 h-28 rounded-2xl bg-white border-2 border-[#1E1E1E] shadow-brutal-sm flex flex-col items-center justify-center relative overflow-hidden group-hover:scale-105 transition-transform">
-                    {/* Cute smiling silhouette face */}
                     <div className="w-10 h-10 rounded-full bg-[#EFECE5] border-2 border-[#1E1E1E] flex items-center justify-center mb-1">
                       <div className="flex gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-[#1E1E1E]" />
@@ -289,7 +332,6 @@ export default function DisplayPage() {
                       </div>
                     </div>
                     <div className="w-14 h-8 rounded-t-xl bg-terracotta/20 border-t-2 border-r-2 border-l-2 border-[#1E1E1E]" />
-                    {/* Sparkle badge */}
                     <div className="absolute top-1 right-1">
                       <Sparkles className="w-3.5 h-3.5 text-terracotta animate-spin" />
                     </div>
@@ -308,7 +350,6 @@ export default function DisplayPage() {
                   </div>
                 </div>
 
-                {/* Brass Exhibition Plaque on bottom of frame */}
                 <div className="mt-2 text-center">
                   <span className="text-[9px] font-mono uppercase font-bold tracking-widest text-[#8A8780]">
                     NEXORA PORTRAIT STUDIO • NO. 01
@@ -317,7 +358,7 @@ export default function DisplayPage() {
               </div>
             </div>
 
-            {/* RIGHT SIDE: CLEAN INVITATION & QR CODE STANDEE */}
+            {/* Right Side: Invitation and QR Code */}
             <div className="max-w-md space-y-6">
               <div className="space-y-3">
                 <span className="localflow-badge-orange text-xs font-mono font-bold uppercase">
@@ -327,11 +368,10 @@ export default function DisplayPage() {
                   Step Into Another <span className="text-terracotta italic font-normal">Era</span>.
                 </h2>
                 <p className="text-sm text-[#4A4A4A] leading-relaxed">
-                  Take a quick selfie on your phone, choose a style, and watch your photo transform inside the gallery frame above.
+                  Take a portrait on your phone, choose a style, and watch your photo transform inside the gallery frame.
                 </p>
               </div>
 
-              {/* QR Code Card */}
               <div className="localflow-card p-5 bg-white flex items-center gap-5">
                 <div className="w-28 h-28 rounded-xl border-2 border-[#1E1E1E] bg-[#FAF8F4] p-1 flex-shrink-0 shadow-brutal-sm">
                   {qrDataUrl ? (
@@ -349,14 +389,13 @@ export default function DisplayPage() {
                     Open Camera on Phone
                   </p>
                   <p className="text-xs text-[#6B6B6B] font-mono leading-tight">
-                    Instant web capture • No app download required
+                    Instant upload • Choose your theme
                   </p>
                 </div>
               </div>
 
-              {/* Aesthetic eras preview pills */}
               <div className="flex flex-wrap gap-1.5 pt-1">
-                {STYLE_ERAS.map((era) => (
+                {themes.map((era) => (
                   <button
                     key={era.id}
                     onClick={() => runPrototypeDemo(era.id)}
@@ -372,153 +411,113 @@ export default function DisplayPage() {
           </div>
         )}
 
-        {/* PHASE 2: IMAGE RECEIVED & PIXELATED CONVERTING ANIMATION */}
-        {phase === 'loading' && activePhoto && (
-          <div className="w-full max-w-xl flex flex-col items-center text-center space-y-6 animate-fadeIn">
-            {/* Header Ticket Pill */}
+        {/* PHASE 2 & 3: PHOTO LOADED, PIXEL DISSOLVING, OR REVEALED */}
+        {(phase === 'loaded' || phase === 'transitioning' || phase === 'reveal') && activePhoto && (
+          <div className="w-full max-w-xl flex flex-col items-center text-center space-y-5 animate-fadeIn">
+            {/* Header Badge */}
             <div className="space-y-1">
               <div className="inline-flex items-center gap-2 localflow-badge-orange text-xs font-mono font-bold uppercase">
                 <span className="w-2 h-2 rounded-full bg-terracotta animate-ping" />
                 {activePhoto.ticketNumber} • {activePhoto.guestName}
               </div>
               <h2 className="font-serif text-3xl md:text-4xl font-black text-[#1E1E1E] tracking-tight">
-                Synthesizing {currentEra.name}
+                {phase === 'reveal' ? `${activePhoto.guestName} in the ${currentEra.name}` : `Target Era: ${currentEra.name}`}
               </h2>
               <p className="text-xs font-mono text-[#6B6B6B]">
-                {currentEra.eraLabel}
+                {currentEra.eraLabel} • {currentEra.tagline}
               </p>
             </div>
 
-            {/* ART GALLERY FRAME WITH PIXELATED CANVAS & CONVERTING LOGO */}
+            {/* ART FRAME */}
             <div className="relative flex flex-col items-center">
-              {/* Hanging Wire */}
               <div className="w-4 h-4 rounded-full bg-[#3D3D3D] border-2 border-[#1E1E1E] shadow-sm mb-1 z-10" />
               <div 
                 className="w-40 h-8 border-t-2 border-r-2 border-l-2 border-[#1E1E1E]/40 pointer-events-none -mb-3 rotate-180" 
                 style={{ clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)' }}
               />
 
-              {/* Picture Frame */}
-              <div className="w-72 md:w-80 aspect-[3/4] bg-[#FAF8F4] rounded-3xl border-4 border-[#1E1E1E] p-4 shadow-[8px_12px_0px_#1E1E1E] relative flex flex-col justify-between overflow-hidden">
-                <div className="relative w-full h-full rounded-2xl overflow-hidden border-2 border-[#1E1E1E] bg-black flex items-center justify-center">
-                  {/* The Live Pixelating Canvas */}
-                  <canvas
-                    ref={canvasRef}
-                    width={320}
-                    height={420}
-                    className="w-full h-full object-cover"
-                  />
-
-                  {/* Converting Shimmer & Scanline */}
-                  <div className="animate-scanline" />
-
-                  {/* Center Converting Badge / Spinner */}
-                  <div className="absolute inset-0 bg-black/40 backdrop-blur-[1.5px] flex flex-col items-center justify-center p-4 text-center">
-                    {/* Cute Converting Icon */}
-                    <div className="w-16 h-16 rounded-2xl bg-white border-2 border-[#1E1E1E] shadow-brutal flex items-center justify-center mb-3 animate-spin">
-                      <Sparkles className="w-8 h-8 text-terracotta" />
-                    </div>
-
-                    <span className="font-serif font-bold text-white text-base drop-shadow-md">
-                      Converting Portrait...
-                    </span>
-                    <span className="text-[11px] font-mono text-terracotta font-bold bg-white/90 px-2 py-0.5 rounded border border-[#1E1E1E] mt-1 shadow-sm">
-                      {currentEra.name}
-                    </span>
-                  </div>
-
-                  {/* Bottom Progress Bar */}
-                  <div className="absolute bottom-3 left-3 right-3 bg-white/95 border-2 border-[#1E1E1E] rounded-xl p-2 shadow-brutal-sm text-left">
-                    <div className="flex items-center justify-between text-[10px] font-mono font-bold text-[#1E1E1E] mb-1">
-                      <span className="truncate pr-1">{loadingMessage}</span>
-                      <span className="text-terracotta">{progress}%</span>
-                    </div>
-                    <div className="w-full h-2 bg-[#EFECE5] rounded-full overflow-hidden border border-[#1E1E1E]/20">
-                      <div 
-                        className="h-full bg-terracotta transition-all duration-300"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <p className="text-xs font-mono text-[#6B6B6B] max-w-sm">
-              Applying authentic era textures, palette, and styling... Look at the screen for the grand reveal!
-            </p>
-          </div>
-        )}
-
-        {/* PHASE 3: DRAMATIC REVEAL WITH SMOOTH COMPARISON SLIDER */}
-        {phase === 'reveal' && activePhoto && (
-          <div className="w-full max-w-xl flex flex-col items-center text-center space-y-5 animate-fadeIn">
-            {/* Reveal Header */}
-            <div className="space-y-1">
-              <span className="localflow-badge-green text-xs font-mono font-bold uppercase">
-                ✓ Transformation Complete
-              </span>
-              <h2 className="font-serif text-3xl md:text-4xl font-black text-[#1E1E1E] tracking-tight">
-                {activePhoto.guestName} in the {currentEra.name}
-              </h2>
-              <p className="text-xs font-mono text-[#6B6B6B]">
-                {activePhoto.ticketNumber} • {currentEra.tagline}
-              </p>
-            </div>
-
-            {/* ART GALLERY HANGING FRAME WITH REVEALED PORTRAIT */}
-            <div className="relative flex flex-col items-center">
-              {/* Hanging Wire */}
-              <div className="w-4 h-4 rounded-full bg-[#3D3D3D] border-2 border-[#1E1E1E] shadow-sm mb-1 z-10" />
-              <div 
-                className="w-40 h-8 border-t-2 border-r-2 border-l-2 border-[#1E1E1E]/40 pointer-events-none -mb-3 rotate-180" 
-                style={{ clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)' }}
-              />
-
-              {/* Picture Frame */}
               <div className="w-72 md:w-80 aspect-[3/4] bg-[#FAF8F4] rounded-3xl border-4 border-[#1E1E1E] p-4 shadow-[8px_12px_0px_#1E1E1E] relative flex flex-col justify-between overflow-hidden">
                 <div className="relative w-full h-full rounded-2xl overflow-hidden border-2 border-[#1E1E1E] bg-black">
-                  {/* Transformed Branded Image */}
-                  <img
-                    src={activePhoto.transformedPhotoUrl || activePhoto.rawPhotoUrl}
-                    alt="Transformed final portrait"
-                    className="absolute inset-0 w-full h-full object-cover"
+                  {/* UNDERNEATH LAYER: TRANSFORMED IMAGE (Revealed as pixels fall) */}
+                  {activePhoto.transformedPhotoUrl && (
+                    <img
+                      src={activePhoto.transformedPhotoUrl}
+                      alt="Transformed final"
+                      className="absolute inset-0 w-full h-full object-cover"
+                    />
+                  )}
+
+                  {/* STATIC RAW PHOTO WHEN JUST LOADED */}
+                  {phase === 'loaded' && (
+                    <div className="relative w-full h-full">
+                      <img
+                        src={activePhoto.rawPhotoUrl}
+                        alt="Original portrait"
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute top-2 left-2 bg-white text-[#1E1E1E] text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded border border-[#1E1E1E] shadow-brutal-sm">
+                        Original Photo
+                      </div>
+                      <div className="absolute bottom-3 left-3 right-3 bg-white/95 border-2 border-[#1E1E1E] rounded-xl p-2.5 shadow-brutal-sm text-center">
+                        <span className="text-xs font-serif font-bold text-[#1E1E1E] block">
+                          Ready for Transformation
+                        </span>
+                        <span className="text-[10px] font-mono text-terracotta font-bold">
+                          Awaiting Operator Command...
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* FALLING PIXEL CANVAS LAYER (Active during transition) */}
+                  <canvas
+                    ref={particleCanvasRef}
+                    width={320}
+                    height={420}
+                    className={`absolute inset-0 w-full h-full object-cover pointer-events-none ${
+                      phase === 'transitioning' ? 'block' : 'hidden'
+                    }`}
                   />
 
-                  {/* Foreground: Original Photo clipped by slider position */}
-                  <div 
-                    className="absolute inset-0 overflow-hidden"
-                    style={{ width: `${100 - sliderPos}%` }}
-                  >
-                    <img
-                      src={activePhoto.rawPhotoUrl}
-                      alt="Original portrait"
-                      className="w-full h-full object-cover max-w-none"
-                      style={{ width: '100%' }}
-                    />
-                    <div className="absolute top-2 left-2 bg-white text-[#1E1E1E] text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded border border-[#1E1E1E] shadow-brutal-sm">
-                      Original
-                    </div>
-                  </div>
+                  {/* SLIDER REVEAL LAYER (When in reveal mode) */}
+                  {phase === 'reveal' && (
+                    <>
+                      {/* Left side slider clip showing original */}
+                      <div 
+                        className="absolute inset-0 overflow-hidden"
+                        style={{ width: `${100 - sliderPos}%` }}
+                      >
+                        <img
+                          src={activePhoto.rawPhotoUrl}
+                          alt="Original"
+                          className="w-full h-full object-cover max-w-none"
+                          style={{ width: '100%' }}
+                        />
+                        <div className="absolute top-2 left-2 bg-white text-[#1E1E1E] text-[9px] font-mono font-bold uppercase px-2 py-0.5 rounded border border-[#1E1E1E] shadow-brutal-sm">
+                          Original
+                        </div>
+                      </div>
 
-                  {/* Slider divider line */}
-                  <div 
-                    className="absolute top-0 bottom-0 w-1 bg-white shadow-[0_0_12px_#D96E3D] pointer-events-none"
-                    style={{ left: `${100 - sliderPos}%` }}
-                  >
-                    <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-7 h-7 rounded-full bg-white border-2 border-[#1E1E1E] shadow-brutal flex items-center justify-center text-[#1E1E1E]">
-                      <span className="text-[10px] font-bold">⇄</span>
-                    </div>
-                  </div>
+                      {/* Divider line */}
+                      <div 
+                        className="absolute top-0 bottom-0 w-1 bg-white shadow-[0_0_12px_#D96E3D] pointer-events-none"
+                        style={{ left: `${100 - sliderPos}%` }}
+                      >
+                        <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-7 h-7 rounded-full bg-white border-2 border-[#1E1E1E] shadow-brutal flex items-center justify-center text-[#1E1E1E]">
+                          <span className="text-[10px] font-bold">⇄</span>
+                        </div>
+                      </div>
 
-                  {/* Nexora Plaque Badge on bottom right */}
-                  <div className="absolute bottom-2 right-2 bg-white/95 border-2 border-[#1E1E1E] px-2.5 py-1 rounded-lg shadow-brutal-sm flex items-center gap-1.5">
-                    <span className="font-serif font-bold text-xs tracking-wider text-[#1E1E1E]">NEXORA</span>
-                    <span className="text-[9px] font-mono text-terracotta font-bold">• {currentEra.name}</span>
-                  </div>
+                      {/* Nexora Brand Stamp */}
+                      <div className="absolute bottom-2 right-2 bg-white/95 border-2 border-[#1E1E1E] px-2.5 py-1 rounded-lg shadow-brutal-sm flex items-center gap-1.5">
+                        <span className="font-serif font-bold text-xs tracking-wider text-[#1E1E1E]">NEXORA</span>
+                        <span className="text-[9px] font-mono text-terracotta font-bold">• {currentEra.name}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {/* Brass Exhibition Plate */}
+                {/* Exhibition Plaque */}
                 <div className="mt-2 text-center flex items-center justify-between px-1 text-[10px] font-mono text-[#6B6B6B]">
                   <span>{activePhoto.ticketNumber}</span>
                   <span className="font-bold text-[#1E1E1E]">{activePhoto.guestName}</span>
@@ -527,57 +526,53 @@ export default function DisplayPage() {
               </div>
             </div>
 
-            {/* Comparison Slider Bar */}
-            <div className="w-72 md:w-80 space-y-1">
-              <div className="flex items-center justify-between text-[11px] font-mono text-[#6B6B6B]">
-                <span>Original</span>
-                <span className="text-terracotta font-bold">← Slide to compare →</span>
-                <span>{currentEra.name}</span>
+            {/* Slider bar if in reveal phase */}
+            {phase === 'reveal' && (
+              <div className="w-72 md:w-80 space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-mono text-[#6B6B6B]">
+                  <span>Original</span>
+                  <span className="text-terracotta font-bold">← Slide to compare →</span>
+                  <span>{currentEra.name}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={sliderPos}
+                  onChange={(e) => setSliderPos(Number(e.target.value))}
+                  className="w-full accent-terracotta h-2 bg-white rounded-lg border border-[#1E1E1E]/30 cursor-pointer"
+                />
               </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={sliderPos}
-                onChange={(e) => setSliderPos(Number(e.target.value))}
-                className="w-full accent-terracotta h-2 bg-white rounded-lg border border-[#1E1E1E]/30 cursor-pointer"
-              />
-            </div>
+            )}
           </div>
         )}
       </main>
 
       {/* FOOTER BAR */}
-      <footer className="relative z-20 px-8 py-3.5 border-t-2 border-[#1E1E1E]/10 bg-[#FAF8F4]/80 backdrop-blur-md flex flex-col sm:flex-row items-center justify-between gap-2 text-xs font-mono text-[#6B6B6B]">
+      <footer className="relative z-20 px-8 py-3.5 border-t-2 border-[#1E1E1E]/10 bg-[#FAF8F4]/85 backdrop-blur-md flex flex-col sm:flex-row items-center justify-between gap-2 text-xs font-mono text-[#6B6B6B]">
         <div className="flex items-center gap-3">
           <span className="text-terracotta font-bold">NEXORA DISPLAY ENGINE</span>
           <span>•</span>
           <span>Turn Moments Into New Worlds</span>
         </div>
 
-        {/* Prototype Demo Buttons */}
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-[#8A8780] hidden sm:inline">Instant Demos:</span>
+          {themes.slice(0, 3).map((era) => (
+            <button
+              key={era.id}
+              onClick={() => runPrototypeDemo(era.id)}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-[#FAF8F4] border border-[#1E1E1E]/30 text-[#1E1E1E] text-[11px] font-mono shadow-sm transition-all"
+            >
+              {era.name}
+            </button>
+          ))}
           <button
-            onClick={() => runPrototypeDemo('1980s')}
-            className="px-2.5 py-1 rounded-md bg-white hover:bg-[#FAF8F4] border border-[#1E1E1E]/30 text-[#1E1E1E] text-[11px] font-mono shadow-sm transition-all"
-          >
-            1980s Retro
-          </button>
-          <button
-            onClick={() => runPrototypeDemo('cyberpunk')}
-            className="px-2.5 py-1 rounded-md bg-white hover:bg-[#FAF8F4] border border-[#1E1E1E]/30 text-[#1E1E1E] text-[11px] font-mono shadow-sm transition-all"
-          >
-            Cyberpunk
-          </button>
-          <button
-            onClick={() => runPrototypeDemo('ghibli')}
-            className="px-2.5 py-1 rounded-md bg-white hover:bg-[#FAF8F4] border border-[#1E1E1E]/30 text-[#1E1E1E] text-[11px] font-mono shadow-sm transition-all"
-          >
-            Ghibli
-          </button>
-          <button
-            onClick={() => setPhase('idle')}
+            onClick={() => {
+              if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
+              setPhase('idle');
+              setActivePhoto(null);
+            }}
             className="px-2.5 py-1 rounded-md bg-terracotta text-white border border-[#1E1E1E] text-[11px] font-mono shadow-brutal-sm ml-2"
           >
             Reset Standby

@@ -2,16 +2,17 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Camera, SwitchCamera, Upload, Sparkles, Check, ArrowRight, RefreshCw, Zap, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
-import { STYLE_ERAS, getStyleById } from '@/lib/stylesConfig';
-import { EraStyleId, GuestPhoto } from '@/lib/types';
+import { getAllThemes, getStyleById } from '@/lib/stylesConfig';
+import { StyleEra, GuestPhoto } from '@/lib/types';
 import { StorageService } from '@/lib/storageService';
 import Link from 'next/link';
 
 export default function CapturePage() {
-  const [step, setStep] = useState<'camera' | 'review' | 'style' | 'success'>('camera');
+  const [step, setStep] = useState<'camera' | 'style' | 'success'>('camera');
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
-  const [selectedStyle, setSelectedStyle] = useState<EraStyleId>('1980s');
+  const [themes, setThemes] = useState<StyleEra[]>([]);
+  const [selectedStyleId, setSelectedStyleId] = useState<string>('1980s');
   const [guestName, setGuestName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedTicket, setSubmittedTicket] = useState<GuestPhoto | null>(null);
@@ -22,7 +23,22 @@ export default function CapturePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Initialize camera
+  // Load dynamic themes
+  useEffect(() => {
+    const load = () => {
+      const list = getAllThemes();
+      setThemes(list);
+      if (list.length > 0 && !selectedStyleId) {
+        setSelectedStyleId(list[0].id);
+      }
+    };
+    load();
+
+    window.addEventListener('nexora_themes_updated', load);
+    return () => window.removeEventListener('nexora_themes_updated', load);
+  }, [selectedStyleId]);
+
+  // Start camera
   const startCamera = async () => {
     setCameraError(null);
     if (streamRef.current) {
@@ -31,7 +47,7 @@ export default function CapturePage() {
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera API not available on this browser. Use file upload.');
+        throw new Error('Camera API not available. Please choose a photo from your gallery.');
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -68,11 +84,10 @@ export default function CapturePage() {
     setFacingMode(prev => (prev === 'user' ? 'environment' : 'user'));
   };
 
-  // Capture frame from video
+  // Take photo
   const takePhoto = () => {
     if (!videoRef.current) return;
     
-    // Shutter flash effect
     setIsShutterFlash(true);
     setTimeout(() => setIsShutterFlash(false), 150);
 
@@ -83,7 +98,6 @@ export default function CapturePage() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Flip horizontally if front-facing camera for natural mirror feel
     if (facingMode === 'user') {
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
@@ -95,7 +109,7 @@ export default function CapturePage() {
     setStep('style');
   };
 
-  // Fallback file upload
+  // Gallery upload
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -111,15 +125,15 @@ export default function CapturePage() {
     reader.readAsDataURL(file);
   };
 
-  // Submit to stall queue
+  // Submit photo to stall
   const handleSubmit = async () => {
     if (!capturedImage) return;
     setIsSubmitting(true);
 
     try {
       const created = await StorageService.createPhoto({
-        guestName: guestName.trim() || 'GLC Guest',
-        styleId: selectedStyle,
+        guestName: guestName.trim() || 'Stall Guest',
+        styleId: selectedStyleId as any,
         rawPhotoUrl: capturedImage,
       });
 
@@ -138,11 +152,11 @@ export default function CapturePage() {
     setStep('camera');
   };
 
-  const selectedEraObj = getStyleById(selectedStyle);
+  const selectedEraObj = getStyleById(selectedStyleId);
 
   return (
     <div className="min-h-screen bg-canvas text-ink-900 flex flex-col justify-between max-w-md mx-auto relative px-4 py-4 pb-8 select-none">
-      {/* Header */}
+      {/* Top Header */}
       <header className="flex items-center justify-between py-2 border-b-2 border-ink-900/10 mb-4">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-terracotta text-white font-bold flex items-center justify-center border-2 border-ink-900 shadow-brutal-sm">
@@ -159,20 +173,18 @@ export default function CapturePage() {
         </div>
         <span className="localflow-badge-green text-xs flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
-          Stall Live
+          Live Stall
         </span>
       </header>
 
-      {/* STEP 1: CAMERA VIEW */}
+      {/* STEP 1: CAMERA VIEWFINDER */}
       {step === 'camera' && (
         <div className="flex-1 flex flex-col justify-between space-y-4">
           <div className="relative w-full aspect-[3/4] rounded-2xl overflow-hidden border-2 border-ink-900 bg-ink-900 shadow-brutal flex items-center justify-center">
-            {/* Shutter Flash Overlay */}
             {isShutterFlash && (
               <div className="absolute inset-0 bg-white z-40 transition-opacity" />
             )}
 
-            {/* Video Viewfinder */}
             <video
               ref={videoRef}
               autoPlay
@@ -181,11 +193,10 @@ export default function CapturePage() {
               className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
             />
 
-            {/* Camera Guides */}
             <div className="absolute inset-0 pointer-events-none border-[12px] border-black/20 flex flex-col justify-between p-4">
               <div className="flex justify-between items-start">
                 <span className="bg-black/60 backdrop-blur-sm text-white font-mono text-[11px] px-2.5 py-1 rounded-md border border-white/20">
-                  PORTRAIT MODE
+                  PORTRAIT
                 </span>
                 <span className="bg-terracotta text-white font-mono text-[11px] px-2 py-1 rounded-md font-bold">
                   STEP 1 / 2
@@ -193,41 +204,36 @@ export default function CapturePage() {
               </div>
               <div className="flex justify-center">
                 <div className="w-36 h-48 rounded-full border-2 border-dashed border-white/60 flex items-center justify-center">
-                  <span className="text-white/70 text-xs font-medium px-2 py-1 bg-black/40 rounded">
-                    Position Face Here
+                  <span className="text-white/80 text-xs font-medium px-2 py-1 bg-black/40 rounded">
+                    Align Face Here
                   </span>
                 </div>
               </div>
-              <div className="text-center">
-                <p className="text-white/80 text-xs font-medium drop-shadow">
-                  Hold steady and smile!
-                </p>
-              </div>
+              <p className="text-center text-white/80 text-xs font-medium drop-shadow">
+                Hold steady and smile!
+              </p>
             </div>
 
-            {/* Camera Error Fallback Message */}
             {cameraError && (
               <div className="absolute inset-0 bg-canvas-card p-6 flex flex-col items-center justify-center text-center z-20">
                 <div className="w-12 h-12 rounded-full bg-terracotta/20 text-terracotta flex items-center justify-center mb-3 border-2 border-terracotta">
                   <Camera className="w-6 h-6" />
                 </div>
-                <h3 className="font-serif text-lg font-bold mb-1">Camera Access</h3>
+                <h3 className="font-serif text-lg font-bold mb-1">Camera Permission</h3>
                 <p className="text-xs text-ink-500 mb-4">{cameraError}</p>
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="localflow-btn-primary px-4 py-2.5 text-sm flex items-center gap-2"
                 >
                   <Upload className="w-4 h-4" />
-                  Choose Photo from Gallery
+                  Choose from Gallery
                 </button>
               </div>
             )}
           </div>
 
-          {/* Camera Controls */}
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-4 px-2">
-              {/* Switch Camera Button */}
               <button
                 type="button"
                 onClick={toggleFacingMode}
@@ -237,7 +243,6 @@ export default function CapturePage() {
                 <SwitchCamera className="w-5 h-5" />
               </button>
 
-              {/* Main Shutter Button */}
               <button
                 type="button"
                 onClick={takePhoto}
@@ -248,7 +253,6 @@ export default function CapturePage() {
                 </div>
               </button>
 
-              {/* Upload fallback */}
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -260,7 +264,7 @@ export default function CapturePage() {
             </div>
 
             <p className="text-center text-xs text-ink-500 font-mono">
-              Tap the orange shutter or choose from camera roll
+              Tap the shutter or upload from camera roll
             </p>
           </div>
 
@@ -274,18 +278,17 @@ export default function CapturePage() {
         </div>
       )}
 
-      {/* STEP 2: SELECT ERA STYLE & NAME */}
+      {/* STEP 2: CHOOSE THEME & UPLOAD */}
       {step === 'style' && capturedImage && (
         <div className="flex-1 flex flex-col justify-between space-y-4">
           <div className="space-y-3">
-            {/* Top Bar with Retake & Preview Thumbnail */}
             <div className="flex items-center justify-between">
               <div>
                 <span className="localflow-badge-orange text-[10px] font-mono uppercase font-bold tracking-wider">
                   Step 2 of 2
                 </span>
                 <h2 className="font-serif text-xl font-bold mt-1 text-ink-900">
-                  Pick Your New Era
+                  Select Your Era Theme
                 </h2>
               </div>
               <button
@@ -297,27 +300,27 @@ export default function CapturePage() {
               </button>
             </div>
 
-            {/* Guest Name input */}
-            <div className="localflow-card p-3 flex items-center gap-3">
-              <div className="w-12 h-12 rounded-lg border border-ink-900 overflow-hidden flex-shrink-0">
+            {/* Photo Preview and Name */}
+            <div className="localflow-card p-3 flex items-center gap-3 bg-white">
+              <div className="w-14 h-16 rounded-lg border border-ink-900 overflow-hidden flex-shrink-0">
                 <img src={capturedImage} alt="Captured preview" className="w-full h-full object-cover" />
               </div>
               <div className="flex-1">
                 <label className="block text-[11px] font-mono text-ink-500 font-bold uppercase mb-0.5">
-                  Your Name / Nickname (Optional)
+                  Your Name / Nickname
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Alex"
+                  placeholder="e.g. Maya"
                   value={guestName}
                   onChange={(e) => setGuestName(e.target.value)}
-                  className="w-full text-sm font-semibold bg-white border border-ink-900/30 rounded-md px-2.5 py-1 focus:outline-none focus:border-terracotta"
+                  className="w-full text-sm font-semibold bg-canvas border border-ink-900/30 rounded-md px-2.5 py-1.5 focus:outline-none focus:border-terracotta"
                   maxLength={24}
                 />
               </div>
             </div>
 
-            {/* Era Styles Carousel / Grid */}
+            {/* Dynamic Themes Grid */}
             <div className="space-y-2">
               <label className="text-xs font-mono font-bold uppercase tracking-wider text-ink-700 flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-terracotta" />
@@ -325,26 +328,26 @@ export default function CapturePage() {
               </label>
 
               <div className="grid grid-cols-2 gap-2.5 max-h-[38vh] overflow-y-auto pr-1 pb-1">
-                {STYLE_ERAS.map((era) => {
-                  const isSelected = selectedStyle === era.id;
+                {themes.map((era) => {
+                  const isSelected = selectedStyleId === era.id;
                   return (
                     <button
                       key={era.id}
                       type="button"
-                      onClick={() => setSelectedStyle(era.id)}
-                      className={`relative text-left rounded-xl p-2.5 border-2 transition-all flex flex-col justify-between ${
+                      onClick={() => setSelectedStyleId(era.id)}
+                      className={`relative text-left rounded-xl p-3 border-2 transition-all flex flex-col justify-between ${
                         isSelected
                           ? 'border-ink-900 bg-white shadow-brutal-sm ring-2 ring-terracotta'
                           : 'border-ink-900/20 bg-canvas-card hover:border-ink-900/40'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center justify-between mb-1">
                         <span
-                          className="text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border"
+                          className="text-[11px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border"
                           style={{
-                            backgroundColor: `${era.badgeColor}20`,
-                            color: era.id === 'cyberpunk' ? '#007A87' : era.accentColor,
-                            borderColor: `${era.badgeColor}60`,
+                            backgroundColor: `${era.badgeColor}15`,
+                            color: era.accentColor,
+                            borderColor: `${era.badgeColor}50`,
                           }}
                         >
                           {era.name}
@@ -356,15 +359,7 @@ export default function CapturePage() {
                         )}
                       </div>
 
-                      <div className="relative w-full aspect-[4/3] rounded-lg overflow-hidden border border-ink-900/10 mb-1.5 bg-ink-900">
-                        <img
-                          src={era.demoTransformed}
-                          alt={era.name}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-
-                      <p className="text-[11px] text-ink-700 line-clamp-2 leading-tight">
+                      <p className="text-[11px] text-ink-700 line-clamp-2 leading-tight mt-1">
                         {era.tagline}
                       </p>
                     </button>
@@ -374,7 +369,6 @@ export default function CapturePage() {
             </div>
           </div>
 
-          {/* Submit Button */}
           <div className="pt-2">
             <button
               onClick={handleSubmit}
@@ -384,33 +378,33 @@ export default function CapturePage() {
               {isSubmitting ? (
                 <>
                   <RefreshCw className="w-5 h-5 animate-spin" />
-                  Sending to Stall Screen...
+                  Uploading to Stall...
                 </>
               ) : (
                 <>
-                  <span>Send to Stall Display</span>
+                  <span>Upload & Step into {selectedEraObj.name}</span>
                   <ArrowRight className="w-5 h-5" />
                 </>
               )}
             </button>
             <p className="text-center text-[11px] text-ink-500 font-mono mt-2">
-              Photo will appear on the big screen instantly
+              Photo will appear on the big gallery screen immediately
             </p>
           </div>
         </div>
       )}
 
-      {/* STEP 3: SUCCESS TICKET SCREEN */}
+      {/* STEP 3: SUCCESS CONFIRMATION */}
       {step === 'success' && submittedTicket && (
         <div className="flex-1 flex flex-col justify-between py-2 text-center space-y-4">
-          <div className="localflow-card p-6 space-y-4">
+          <div className="localflow-card p-6 space-y-4 bg-white">
             <div className="w-16 h-16 rounded-full bg-emerald-100 border-2 border-emerald-600 text-emerald-700 mx-auto flex items-center justify-center shadow-brutal-sm">
               <CheckCircle2 className="w-8 h-8 stroke-[2.5]" />
             </div>
 
             <div>
               <span className="localflow-badge-green font-mono uppercase text-xs">
-                Ticket Confirmed
+                Photo Uploaded!
               </span>
               <h2 className="font-serif text-3xl font-black text-ink-900 mt-2">
                 {submittedTicket.ticketNumber}
@@ -420,7 +414,6 @@ export default function CapturePage() {
               </p>
             </div>
 
-            {/* Ticket Card Details */}
             <div className="border-t-2 border-b-2 border-dashed border-ink-900/20 py-4 flex items-center justify-around">
               <div className="text-center">
                 <span className="text-[10px] font-mono text-ink-500 uppercase block">Selected Era</span>
@@ -430,19 +423,19 @@ export default function CapturePage() {
               </div>
               <div className="h-8 w-px bg-ink-900/20" />
               <div className="text-center">
-                <span className="text-[10px] font-mono text-ink-500 uppercase block">Status</span>
+                <span className="text-[10px] font-mono text-ink-500 uppercase block">Queue Status</span>
                 <span className="localflow-badge-orange text-[10px] uppercase font-mono animate-pulse">
-                  On Queue
+                  Ready for AI
                 </span>
               </div>
             </div>
 
-            <div className="bg-canvas p-3.5 rounded-xl border-2 border-ink-900 text-left flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-terracotta text-white flex items-center justify-center flex-shrink-0 font-bold font-mono text-sm">
+            <div className="bg-canvas p-4 rounded-xl border-2 border-ink-900 text-left flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-terracotta text-white flex items-center justify-center flex-shrink-0 font-bold font-mono text-base">
                 📺
               </div>
               <p className="text-xs font-medium text-ink-800 leading-snug">
-                Look up at the <strong className="text-terracotta">Big TV Screen</strong> at the stall! Your transformation will play shortly.
+                Look up at the <strong className="text-terracotta">Big TV Frame</strong> at the stall! Your photo is now ready to transform.
               </p>
             </div>
           </div>
@@ -457,22 +450,21 @@ export default function CapturePage() {
               className="w-full localflow-btn-secondary py-3 text-sm flex items-center justify-center gap-2"
             >
               <Camera className="w-4 h-4" />
-              Capture Another Photo
+              Take Another Photo
             </button>
             <Link
               href="/"
               className="block text-center text-xs text-ink-500 underline font-mono py-1"
             >
-              ← Return to Stall Main Portal
+              ← Stall Home
             </Link>
           </div>
         </div>
       )}
 
-      {/* Stall Footer Branding */}
       <footer className="mt-4 pt-2 border-t border-ink-900/10 text-center">
         <p className="text-[10px] font-mono text-ink-400">
-          NEXORA GLC STALL • POWERED BY AI & SUPABASE
+          NEXORA GLC STALL • SAME YOU. DIFFERENT ERA.
         </p>
       </footer>
     </div>
