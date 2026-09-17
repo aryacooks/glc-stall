@@ -196,7 +196,7 @@ export const StorageService = {
     }
   },
 
-  // Listen to realtime updates
+  // Listen to realtime updates across tabs, LAN, and Supabase cloud
   subscribe(callback: (event: RealtimeEvent) => void): () => void {
     const handleBroadcast = (e: MessageEvent) => {
       callback(e.data);
@@ -216,6 +216,47 @@ export const StorageService = {
       window.addEventListener('nexora_sync_event', handleCustom);
     }
 
+    // Cloud Realtime via Supabase WebSockets
+    let supabaseChannel: any = null;
+    if (isSupabaseConfigured && supabase) {
+      try {
+        supabaseChannel = supabase
+          .channel('nexora_db_changes')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'nexora_photos' },
+            (payload: any) => {
+              if (payload.eventType === 'INSERT' && payload.new) {
+                callback({
+                  type: 'PHOTO_QUEUED',
+                  payload: payload.new as GuestPhoto,
+                });
+              } else if (payload.eventType === 'UPDATE' && payload.new) {
+                const updated = payload.new as GuestPhoto;
+                if (updated.status === 'processing') {
+                  callback({
+                    type: 'PHOTO_PROCESSING',
+                    payload: {
+                      id: updated.id,
+                      progress: updated.progress || 50,
+                      message: updated.statusMessage || 'Processing...',
+                    },
+                  });
+                } else if (updated.status === 'ready' && updated.transformedPhotoUrl) {
+                  callback({
+                    type: 'PHOTO_TRANSFORMED',
+                    payload: updated,
+                  });
+                }
+              }
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Supabase Realtime subscription error', err);
+      }
+    }
+
     // Return cleanup function
     return () => {
       if (broadcastChannel) {
@@ -223,6 +264,9 @@ export const StorageService = {
       }
       if (typeof window !== 'undefined') {
         window.removeEventListener('nexora_sync_event', handleCustom);
+      }
+      if (supabaseChannel && supabase) {
+        supabase.removeChannel(supabaseChannel);
       }
     };
   },
