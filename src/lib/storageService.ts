@@ -21,8 +21,9 @@ if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
 let ticketSequence = 100;
 
 export const StorageService = {
-  // Load all photos from LocalStorage or Supabase
+  // Load all photos from Supabase, Server API, or LocalStorage
   async getAllPhotos(): Promise<GuestPhoto[]> {
+    // 1. Try direct Supabase client if configured
     if (isSupabaseConfigured && supabase) {
       try {
         const { data, error } = await supabase
@@ -31,13 +32,29 @@ export const StorageService = {
           .order('createdAt', { ascending: false });
 
         if (!error && data) {
-          return data as GuestPhoto[];
+          localCache = data as GuestPhoto[];
+          return localCache;
         }
       } catch (err) {
-        console.warn('Failed to query Supabase, falling back to local storage', err);
+        console.warn('Failed to query direct Supabase, trying /api/photos', err);
       }
     }
 
+    // 2. Try server API endpoint (uses service role key on server)
+    try {
+      const res = await fetch('/api/photos', { cache: 'no-store' });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.photos && Array.isArray(json.photos)) {
+          localCache = json.photos;
+          return localCache;
+        }
+      }
+    } catch {
+      // offline fallback
+    }
+
+    // 3. Fallback to localStorage
     if (typeof window !== 'undefined') {
       try {
         const stored = localStorage.getItem(STORAGE_KEY);
@@ -74,20 +91,44 @@ export const StorageService = {
       updatedAt: Date.now(),
     };
 
-    // Try Supabase first if configured
-    if (isSupabaseConfigured && supabase) {
+    let savedPhoto = newPhoto;
+
+    // 1. Send to server API route which uploads to Supabase Storage & inserts into DB
+    try {
+      const res = await fetch('/api/photos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newPhoto),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.photo) {
+          savedPhoto = json.photo;
+        }
+      } else {
+        console.warn('/api/photos returned status', res.status);
+      }
+    } catch (apiErr) {
+      console.warn('Could not reach /api/photos, trying direct Supabase', apiErr);
+    }
+
+    // 2. Direct Supabase fallback if API route was not reachable
+    if (savedPhoto.rawPhotoUrl.startsWith('data:') && isSupabaseConfigured && supabase) {
       try {
-        await supabase.from('nexora_photos').insert([newPhoto]);
+        const { error } = await supabase.from('nexora_photos').upsert([savedPhoto]);
+        if (error) {
+          console.error('Direct Supabase insert error:', error.message);
+        }
       } catch (err) {
-        console.warn('Supabase insert failed, saving locally', err);
+        console.warn('Direct Supabase insert failed', err);
       }
     }
 
-    // Save locally
+    // 3. Save locally as immediate responsive cache
     if (typeof window !== 'undefined') {
       try {
         const current = await this.getAllPhotos();
-        const updated = [newPhoto, ...current];
+        const updated = [savedPhoto, ...current.filter(p => p.id !== savedPhoto.id)];
         localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
         localCache = updated;
       } catch (err) {
@@ -95,24 +136,13 @@ export const StorageService = {
       }
     }
 
-    // Also notify server endpoint so other devices on same WiFi get notified
-    try {
-      fetch('/api/photos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newPhoto),
-      }).catch(() => {});
-    } catch {
-      // safe ignore in offline environments
-    }
-
-    // Broadcast event across browser tabs / windows
+    // 4. Broadcast event across browser tabs / windows
     this.broadcastEvent({
       type: 'PHOTO_QUEUED',
-      payload: newPhoto,
+      payload: savedPhoto,
     });
 
-    return newPhoto;
+    return savedPhoto;
   },
 
   // Update photo status (e.g. processing, or transformed output attached)

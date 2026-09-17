@@ -78,9 +78,13 @@ export default function OperatorDashboard() {
       }
     });
 
+    // Auto-poll fallback every 3.5s in case WebSockets are blocked on venue Wi-Fi
+    const pollInterval = setInterval(refreshPhotos, 3500);
+
     return () => {
       window.removeEventListener('nexora_themes_updated', loadThemesList);
       unsubscribe();
+      clearInterval(pollInterval);
     };
   }, []);
 

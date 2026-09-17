@@ -87,17 +87,65 @@ export default function CapturePage() {
     setFacingMode(prev => (prev === 'user' ? 'environment' : 'user'));
   };
 
+  // Client-side image compression to guarantee fast uploads and prevent payload limits
+  const compressImage = (dataUrl: string, maxDim = 1200, quality = 0.82): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  };
+
   // Take photo
-  const takePhoto = () => {
+  const takePhoto = async () => {
     if (!videoRef.current) return;
     
     setIsShutterFlash(true);
     setTimeout(() => setIsShutterFlash(false), 150);
 
     const video = videoRef.current;
+    let width = video.videoWidth || 720;
+    let height = video.videoHeight || 1280;
+
+    const maxDim = 1200;
+    if (width > maxDim || height > maxDim) {
+      if (width > height) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+    }
+
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 720;
-    canvas.height = video.videoHeight || 1280;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -107,21 +155,22 @@ export default function CapturePage() {
     }
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
     setCapturedImage(dataUrl);
     setStep('style');
   };
 
-  // Gallery upload
+  // Gallery upload with auto compression
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (uploadEvent) => {
+    reader.onload = async (uploadEvent) => {
       const result = uploadEvent.target?.result as string;
       if (result) {
-        setCapturedImage(result);
+        const compressed = await compressImage(result, 1200, 0.82);
+        setCapturedImage(compressed);
         setStep('style');
       }
     };
@@ -142,9 +191,9 @@ export default function CapturePage() {
 
       setSubmittedTicket(created);
       setStep('success');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error submitting photo', err);
-      alert('Failed to send photo. Please try again.');
+      alert(`Submission error: ${err?.message || 'Could not send photo to stall. Please try again.'}`);
     } finally {
       setIsSubmitting(false);
     }
