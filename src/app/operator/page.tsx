@@ -54,6 +54,9 @@ export default function OperatorDashboard() {
   };
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      document.title = '⚡ Operator Deck (Do Not Spill Coffee) · NEXORA';
+    }
     loadThemesList();
     refreshPhotos();
 

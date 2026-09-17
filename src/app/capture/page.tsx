@@ -25,6 +25,9 @@ export default function CapturePage() {
 
   // Load dynamic themes
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      document.title = '📸 Snap Your Era · NEXORA Time Machine';
+    }
     const load = () => {
       const list = getAllThemes();
       setThemes(list);

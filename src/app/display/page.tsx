@@ -40,6 +40,9 @@ export default function DisplayPage() {
 
   // Load themes & generate QR code
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      document.title = '📺 The Magic Mirror Exhibition · NEXORA';
+    }
     const list = getAllThemes();
     setThemes(list);
 

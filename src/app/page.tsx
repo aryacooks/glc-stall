@@ -14,6 +14,7 @@ export default function StallHub() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      document.title = 'NEXORA 🎪 Stall Hub & Visitor Portal';
       const captureUrl = `${window.location.origin}/capture`;
       QRCodeLib.toDataURL(captureUrl, {
         width: 200,
