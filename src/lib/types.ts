@@ -40,5 +40,7 @@ export type RealtimeEvent =
   | { type: 'PHOTO_QUEUED'; payload: GuestPhoto }
   | { type: 'PHOTO_PROCESSING'; payload: { id: string; progress: number; message: string } }
   | { type: 'PHOTO_TRANSFORMED'; payload: GuestPhoto }
+  | { type: 'PHOTO_DELETED'; payload: { id: string } }
   | { type: 'DISPLAY_RESET' }
   | { type: 'DISPLAY_FORCE_VIEW'; payload: { photoId: string; step: 'loading' | 'reveal' } };
+

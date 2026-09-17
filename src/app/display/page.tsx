@@ -88,6 +88,12 @@ export default function DisplayPage() {
             }
           }
         });
+      } else if (event.type === 'PHOTO_DELETED') {
+        if (activePhoto?.id === event.payload.id) {
+          if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
+          setPhase('idle');
+          setActivePhoto(null);
+        }
       } else if (event.type === 'DISPLAY_RESET') {
         if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
         setPhase('idle');

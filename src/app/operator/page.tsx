@@ -64,6 +64,12 @@ export default function OperatorDashboard() {
         showNotification(`New guest arrived: ${event.payload.guestName} (${event.payload.ticketNumber})`);
         refreshPhotos();
         setSelectedPhotoId(event.payload.id);
+      } else if (event.type === 'PHOTO_DELETED') {
+        setPhotos((prev) => {
+          const nextList = prev.filter((p) => p.id !== event.payload.id);
+          setSelectedPhotoId((curr) => (curr === event.payload.id ? (nextList.length > 0 ? nextList[0].id : null) : curr));
+          return nextList;
+        });
       } else {
         refreshPhotos();
       }
@@ -82,6 +88,31 @@ export default function OperatorDashboard() {
 
   const selectedPhoto = photos.find(p => p.id === selectedPhotoId) || photos[0];
   const selectedEra = selectedPhoto ? getStyleById(selectedPhoto.styleId) : (themes[0] || getAllThemes()[0]);
+
+  // Delete photo from queue
+  const handleDeletePhoto = async (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const target = photos.find(p => p.id === id);
+    const label = target ? `${target.ticketNumber} (${target.guestName})` : 'this photo';
+    if (!confirm(`Are you sure you want to delete ${label} from the queue?`)) {
+      return;
+    }
+
+    try {
+      await StorageService.deletePhoto(id);
+      setPhotos((prev) => {
+        const nextList = prev.filter((p) => p.id !== id);
+        if (selectedPhotoId === id) {
+          setSelectedPhotoId(nextList.length > 0 ? nextList[0].id : null);
+        }
+        return nextList;
+      });
+      showNotification(`Deleted ${label} from queue.`);
+    } catch (err) {
+      console.error('Error deleting photo', err);
+      showNotification('Failed to delete photo.');
+    }
+  };
 
   // Volunteer changes theme on the fly
   const handleChangeEra = async (newStyleId: string) => {
@@ -759,6 +790,16 @@ export default function OperatorDashboard() {
                             {era.name}
                           </span>
                         </div>
+
+                        {/* Delete Button on Queue Card */}
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeletePhoto(photo.id, e)}
+                          className="p-1.5 rounded-lg text-ink-400 hover:text-rose-600 hover:bg-rose-50 transition-colors flex-shrink-0"
+                          title={`Delete ${photo.ticketNumber}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     );
                   })
@@ -786,15 +827,26 @@ export default function OperatorDashboard() {
                       </div>
                     </div>
 
-                    <button
-                      onClick={handleSimulateTransform}
-                      disabled={isProcessing}
-                      className="localflow-btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-mono text-terracotta border-terracotta hover:bg-terracotta-light"
-                      title="Simulate transformation in 2 seconds"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-terracotta" />
-                      {isProcessing ? 'Simulating...' : '1-Click Demo'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => handleDeletePhoto(selectedPhoto.id, e)}
+                        className="localflow-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1.5 font-mono text-rose-700 border-rose-300 hover:bg-rose-50 hover:border-rose-500 transition-colors"
+                        title="Delete this photo from the queue"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Delete</span>
+                      </button>
+
+                      <button
+                        onClick={handleSimulateTransform}
+                        disabled={isProcessing}
+                        className="localflow-btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-mono text-terracotta border-terracotta hover:bg-terracotta-light"
+                        title="Simulate transformation in 2 seconds"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-terracotta" />
+                        {isProcessing ? 'Simulating...' : '1-Click Demo'}
+                      </button>
+                    </div>
                   </div>
 
                   {/* THEME SELECTOR PILLS */}

@@ -180,6 +180,47 @@ export const StorageService = {
     return updatedPhoto;
   },
 
+  // Delete photo from Supabase, LocalStorage, and Server memory
+  async deletePhoto(id: string): Promise<boolean> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('nexora_photos')
+          .delete()
+          .eq('id', id);
+      } catch (err) {
+        console.warn('Supabase delete error', err);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      try {
+        const current = await this.getAllPhotos();
+        const filtered = current.filter(p => p.id !== id);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+        localCache = filtered;
+      } catch (err) {
+        console.error('LocalStorage delete error', err);
+      }
+    }
+
+    // Notify server endpoint
+    try {
+      fetch(`/api/photos/${id}`, {
+        method: 'DELETE',
+      }).catch(() => {});
+    } catch {
+      // safe ignore
+    }
+
+    this.broadcastEvent({
+      type: 'PHOTO_DELETED',
+      payload: { id },
+    });
+
+    return true;
+  },
+
   // Send an event across all open windows (Operator <-> TV Display)
   broadcastEvent(event: RealtimeEvent) {
     if (broadcastChannel) {
@@ -248,6 +289,11 @@ export const StorageService = {
                     payload: updated,
                   });
                 }
+              } else if (payload.eventType === 'DELETE' && payload.old) {
+                callback({
+                  type: 'PHOTO_DELETED',
+                  payload: { id: payload.old.id },
+                });
               }
             }
           )

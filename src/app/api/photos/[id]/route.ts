@@ -101,3 +101,31 @@ export async function PATCH(
     return NextResponse.json({ success: false, error: error.message }, { status: 400 });
   }
 }
+
+export async function DELETE(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const id = params.id;
+
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin
+          .from('nexora_photos')
+          .delete()
+          .eq('id', id);
+      } catch (err) {
+        console.warn('DB delete warning:', err);
+      }
+    }
+
+    const photos = globalStore.nexoraPhotosStore || [];
+    globalStore.nexoraPhotosStore = photos.filter((p: any) => p.id !== id);
+
+    return NextResponse.json({ success: true, id });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+  }
+}
+
