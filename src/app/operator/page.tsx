@@ -59,6 +59,7 @@ export default function OperatorDashboard() {
     }
     loadThemesList();
     refreshPhotos();
+    StorageService.syncLocalToCloud().then(() => refreshPhotos());
 
     window.addEventListener('nexora_themes_updated', loadThemesList);
 

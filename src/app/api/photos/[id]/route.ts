@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const SUPABASE_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  'https://hjwgcfqwjsalpimggtbk.supabase.co';
 
-const supabaseAdmin = (SUPABASE_URL && SERVICE_KEY)
-  ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } })
-  : null;
+const SERVICE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhqd2djZnF3anNhbHBpbWdndGJrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTY0NDMyMCwiZXhwIjoyMTA1MjIwMzIwfQ.hcIe0LaJv5_1hMV-YxYqMcdslst7-ovoEn19G3Z8IhE';
+
+const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_KEY, {
+  auth: { persistSession: false },
+});
 
 const globalStore = globalThis as unknown as {
   nexoraPhotosStore?: any[];

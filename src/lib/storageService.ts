@@ -70,6 +70,45 @@ export const StorageService = {
     return localCache;
   },
 
+  // Auto-sync any orphaned local photos to Supabase so Incognito and other devices see them
+  async syncLocalToCloud(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (!stored) return;
+      const localList: GuestPhoto[] = JSON.parse(stored);
+      if (!localList || localList.length === 0) return;
+
+      // 1. Check what is currently in Supabase
+      let cloudPhotos: GuestPhoto[] = [];
+      if (supabase) {
+        const { data } = await supabase.from('nexora_photos').select('id');
+        if (data) cloudPhotos = data as GuestPhoto[];
+      }
+      const cloudIds = new Set(cloudPhotos.map((p) => p.id));
+
+      // 2. Upload any photos that only exist in localStorage
+      for (const photo of localList) {
+        if (!cloudIds.has(photo.id)) {
+          console.log('[NEXORA] Migrating local photo to Supabase:', photo.ticketNumber, photo.guestName);
+          try {
+            await fetch('/api/photos', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(photo),
+            });
+          } catch {
+            if (supabase) {
+              await supabase.from('nexora_photos').upsert([photo]);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Sync local to cloud warning', e);
+    }
+  },
+
   // Save new incoming photo from guest mobile
   async createPhoto(entry: {
     guestName: string;
