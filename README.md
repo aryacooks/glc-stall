@@ -2,6 +2,9 @@
 ### Interactive AI Photo Booth Experience for the GLC Stall
 
 > Turn Moments Into New Worlds.
+>
+> 📖 **Setting up your own backend?** See the full guide in **[`BACKEND_SETUP.md`](./BACKEND_SETUP.md)**.
+> If using **Antigravity AI**, just prompt: *"Please set up my Supabase backend following `BACKEND_SETUP.md`"*.
 
 Nexora is a web-based AI photo transformation platform built for live booth stalls and events. It features a tactile, warm neo-editorial design (modeled after LocalFlow), zero-lag live synchronization, and a volunteer-driven pipeline that enables realistic AI portrait transformations with zero per-generation API overhead.
 
@@ -91,12 +94,19 @@ Open [http://localhost:3000](http://localhost:3000) to view the Stall Command Hu
 
 ---
 
-## 🗄️ Database Schema (Supabase SQL)
+## 🗄️ Database Schema & Storage Setup
 
-Run the following in your Supabase project's SQL Editor:
+The complete SQL schema, RLS policies, Realtime publication, and Storage bucket creation are in:
+👉 **[`supabase/schema.sql`](./supabase/schema.sql)**
 
+To set up everything in 1 click, follow **[`BACKEND_SETUP.md`](./BACKEND_SETUP.md)** or run:
+```bash
+npm run setup:backend
+```
+
+### Core Table Definition:
 ```sql
-CREATE TABLE IF NOT EXISTS nexora_photos (
+CREATE TABLE IF NOT EXISTS public.nexora_photos (
   id TEXT PRIMARY KEY,
   "ticketNumber" TEXT NOT NULL,
   "guestName" TEXT NOT NULL,
