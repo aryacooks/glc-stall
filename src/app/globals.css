@@ -1,0 +1,193 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..800;1,9..144,300..800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-serif: 'Fraunces', Georgia, serif;
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  
+  --color-canvas: #F5F2EB;
+  --color-card: #FAF8F4;
+  --color-ink: #181818;
+  --color-terracotta: #D96E3D;
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* LocalFlow Signature Card Style */
+.localflow-card {
+  background-color: #FAF8F4;
+  border: 1.75px solid #1E1E1E;
+  border-radius: 14px;
+  box-shadow: 2.5px 2.5px 0px #1E1E1E;
+  transition: all 0.15s ease-in-out;
+}
+
+.localflow-card:hover {
+  box-shadow: 3.5px 3.5px 0px #1E1E1E;
+}
+
+.localflow-card-flat {
+  background-color: #FAF8F4;
+  border: 1.75px solid #1E1E1E;
+  border-radius: 14px;
+}
+
+/* LocalFlow Pill Buttons */
+.localflow-btn-primary {
+  background-color: #D96E3D;
+  color: #FFFFFF;
+  border: 1.75px solid #1E1E1E;
+  border-radius: 10px;
+  font-weight: 600;
+  box-shadow: 2px 2px 0px #1E1E1E;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.localflow-btn-primary:hover {
+  background-color: #C85E2F;
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0px #1E1E1E;
+}
+
+.localflow-btn-primary:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0px #1E1E1E;
+}
+
+.localflow-btn-secondary {
+  background-color: #FFFFFF;
+  color: #1E1E1E;
+  border: 1.75px solid #1E1E1E;
+  border-radius: 10px;
+  font-weight: 600;
+  box-shadow: 2px 2px 0px #1E1E1E;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.localflow-btn-secondary:hover {
+  background-color: #F5F2EB;
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0px #1E1E1E;
+}
+
+.localflow-btn-secondary:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0px #1E1E1E;
+}
+
+/* Tag & Status Pills */
+.localflow-badge-green {
+  background-color: #E1EFEA;
+  color: #1E523E;
+  border: 1.25px solid #2F6B55;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.65rem;
+}
+
+.localflow-badge-orange {
+  background-color: #FCEFE8;
+  color: #B24E22;
+  border: 1.25px solid #D96E3D;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.65rem;
+}
+
+.localflow-badge-neutral {
+  background-color: #EFECE5;
+  color: #4A4A4A;
+  border: 1.25px solid #8A8780;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.65rem;
+}
+
+.localflow-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem 0.5rem;
+  background-color: #FFFFFF;
+  border: 1.5px solid #1E1E1E;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  box-shadow: 1px 1.5px 0px #1E1E1E;
+}
+
+/* Scanner Animation Keyframes */
+@keyframes scanline {
+  0% {
+    top: 0%;
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0.8;
+  }
+}
+
+.animate-scanline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, transparent, rgba(217, 110, 61, 0.9), transparent);
+  box-shadow: 0 0 15px rgba(217, 110, 61, 0.8);
+  animation: scanline 2.4s ease-in-out infinite;
+}
+
+/* Radar pulse */
+@keyframes radar-pulse {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+}
+
+.animate-radar {
+  animation: radar-pulse 3s ease-in-out infinite;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #F5F2EB;
+}
+::-webkit-scrollbar-thumb {
+  background: #D9D5CC;
+  border-radius: 4px;
+  border: 1.5px solid #1E1E1E;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B8B3A7;
+}
