@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { estimateCostForModel } from '@/lib/aiModelsConfig';
 
 export const maxDuration = 60; // Allow sufficient time for image generation on edge/serverless
 
@@ -61,9 +60,36 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: 'Transformation prompt is required.' }, { status: 400 });
     }
 
-    const fallbackCost = estimateCostForModel(model);
     const origin = req.headers.get('origin') || req.headers.get('host') || 'http://localhost:3000';
     const siteUrl = origin.startsWith('http') ? origin : `https://${origin}`;
+
+    // Helper to accurately track exact generation cost from OpenRouter without estimation
+    const getExactOpenRouterCost = async (apiData: any): Promise<number | null> => {
+      const direct = apiData?.usage?.cost ?? apiData?.usage?.total_cost ?? apiData?.cost;
+      if (typeof direct === 'number' && direct > 0) {
+        return direct;
+      }
+      const genId = apiData?.id || apiData?.generation_id;
+      if (genId) {
+        try {
+          const genRes = await fetch(`https://openrouter.ai/api/v1/generation?id=${genId}`, {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+            },
+          });
+          if (genRes.ok) {
+            const genJson = await genRes.json();
+            const tracked = genJson.data?.total_cost ?? genJson.data?.cost ?? genJson.total_cost;
+            if (typeof tracked === 'number' && tracked > 0) {
+              return tracked;
+            }
+          }
+        } catch (genErr) {
+          console.warn('Could not fetch OpenRouter generation details:', genErr);
+        }
+      }
+      return null;
+    };
 
     // Step A: Attempt Dedicated Image API (POST /api/v1/images)
     try {
@@ -92,14 +118,14 @@ export async function POST(req: Request) {
       if (imagesRes.ok) {
         const json = await imagesRes.json();
         const item = json.data?.[0];
-        const cost = json.usage?.cost ?? json.cost ?? fallbackCost;
+        const exactCost = await getExactOpenRouterCost(json);
         if (item) {
           if (item.url) {
             return NextResponse.json({
               success: true,
               imageUrl: item.url,
               model,
-              cost: Number(cost),
+              cost: exactCost,
               usage: json.usage,
               method: 'images',
             });
@@ -110,7 +136,7 @@ export async function POST(req: Request) {
               success: true,
               imageUrl: `data:${mediaType};base64,${item.b64_json}`,
               model,
-              cost: Number(cost),
+              cost: exactCost,
               usage: json.usage,
               method: 'images',
             });
@@ -187,11 +213,8 @@ export async function POST(req: Request) {
     const choice = chatData.choices?.[0];
     const message = choice?.message;
 
-    // Calculate actual cost or fallback
-    const reportedCost = chatData.usage?.cost ?? chatData.usage?.total_cost ?? chatData.cost;
-    const finalCost = typeof reportedCost === 'number' && reportedCost > 0
-      ? reportedCost
-      : fallbackCost;
+    // Calculate actual cost from OpenRouter without estimation
+    const exactCost = await getExactOpenRouterCost(chatData);
 
     // Check for images in message.images array or choice.images
     const imagesList = message?.images || choice?.images || (choice?.image ? [choice.image] : null);
@@ -205,7 +228,7 @@ export async function POST(req: Request) {
           success: true,
           imageUrl: rawUrl.startsWith('data:') || rawUrl.startsWith('http') ? rawUrl : `data:image/png;base64,${rawUrl}`,
           model,
-          cost: Number(finalCost),
+          cost: exactCost,
           usage: chatData.usage,
           method: 'chat.images',
         });
@@ -222,7 +245,7 @@ export async function POST(req: Request) {
           success: true,
           imageUrl: dataUriMatch[0],
           model,
-          cost: Number(finalCost),
+          cost: exactCost,
           usage: chatData.usage,
           method: 'chat.content_data_uri',
         });
@@ -235,7 +258,7 @@ export async function POST(req: Request) {
           success: true,
           imageUrl: mdMatch[1],
           model,
-          cost: Number(finalCost),
+          cost: exactCost,
           usage: chatData.usage,
           method: 'chat.content_markdown',
         });
@@ -248,7 +271,7 @@ export async function POST(req: Request) {
           success: true,
           imageUrl: urlMatch[0],
           model,
-          cost: Number(finalCost),
+          cost: exactCost,
           usage: chatData.usage,
           method: 'chat.content_url',
         });
@@ -260,7 +283,7 @@ export async function POST(req: Request) {
             success: true,
             imageUrl: part.image_url.url,
             model,
-            cost: Number(finalCost),
+            cost: exactCost,
             usage: chatData.usage,
             method: 'chat.content_part',
           });
@@ -270,7 +293,7 @@ export async function POST(req: Request) {
             success: true,
             imageUrl: part.image || part.url,
             model,
-            cost: Number(finalCost),
+            cost: exactCost,
             usage: chatData.usage,
             method: 'chat.content_part',
           });

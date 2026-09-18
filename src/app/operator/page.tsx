@@ -352,14 +352,15 @@ export default function OperatorDashboard() {
       // Apply watermark
       const watermarked = await StorageService.applyWatermark(data.imageUrl, eraStyle.name);
 
-      const cost = typeof data.cost === 'number' ? data.cost : estimateCostForModel(openRouterModelRef.current);
+      // Exact tracked cost from OpenRouter (only set if reported by OpenRouter, never an estimate)
+      const exactCost = typeof data.cost === 'number' && data.cost > 0 ? data.cost : undefined;
 
       // Save to Supabase and local storage
       const updated = await StorageService.updatePhoto(photo.id, {
         transformedPhotoUrl: watermarked,
         status: 'ready',
         statusMessage: `AI Transformed by ${openRouterModelRef.current} (${eraStyle.name})`,
-        apiCost: cost,
+        apiCost: exactCost,
         modelUsed: openRouterModelRef.current,
       });
 
@@ -371,7 +372,7 @@ export default function OperatorDashboard() {
         guestName: photo.guestName,
         styleName: eraStyle.name,
         model: openRouterModelRef.current,
-        cost: cost,
+        cost: exactCost || 0,
         timestamp: Date.now(),
         method: data.method || (isAuto ? 'auto' : 'manual'),
       };
@@ -392,7 +393,7 @@ export default function OperatorDashboard() {
           type: 'PHOTO_TRANSFORMED',
           payload: updated,
         });
-        showNotification(`✨ AI transform complete: ${photo.guestName} revealed on TV! ($${cost.toFixed(3)})`);
+        showNotification(`✨ AI transform complete: ${photo.guestName}${exactCost ? ` ($${exactCost.toFixed(3)})` : ''} revealed on TV!`);
       }
 
       return true;
@@ -443,13 +444,14 @@ export default function OperatorDashboard() {
   const transformedPhotosList = photos.filter((p) => !!p.transformedPhotoUrl);
   const totalGenerationsCount = Math.max(transformedPhotosList.length, usageLog.length);
 
+  // Only sum exact tracked OpenRouter costs, never estimates
   const totalStallCost = photos.reduce((acc, p) => {
-    if (!p.transformedPhotoUrl) return acc;
-    const itemCost = typeof p.apiCost === 'number' ? p.apiCost : estimateCostForModel(p.modelUsed || openRouterModel);
-    return acc + itemCost;
+    if (!p.transformedPhotoUrl || typeof p.apiCost !== 'number') return acc;
+    return acc + p.apiCost;
   }, 0);
 
-  const averageCostPerImage = transformedPhotosList.length > 0 ? totalStallCost / transformedPhotosList.length : 0;
+  const photosWithActualCost = photos.filter((p) => !!p.transformedPhotoUrl && typeof p.apiCost === 'number' && p.apiCost > 0);
+  const averageCostPerImage = photosWithActualCost.length > 0 ? totalStallCost / photosWithActualCost.length : 0;
 
   // Active Tier configuration
   const activeTier = getModelTierById(openRouterModel) || {
@@ -1349,12 +1351,26 @@ export default function OperatorDashboard() {
                             : 'bg-canvas-card border-ink-900/20 hover:border-ink-900/50'
                         }`}
                       >
-                        <div className="w-12 h-14 rounded-lg border border-ink-900 overflow-hidden flex-shrink-0 bg-ink-900">
-                          <img
-                            src={photo.transformedPhotoUrl || photo.rawPhotoUrl}
-                            alt={photo.guestName}
-                            className="w-full h-full object-cover"
-                          />
+                        {/* Thumbnail on left with exact tracked cost right below it after generation */}
+                        <div className="flex flex-col items-center flex-shrink-0">
+                          <div className="w-14 h-16 rounded-lg border-2 border-ink-900 overflow-hidden bg-ink-900 shadow-xs relative">
+                            <img
+                              src={photo.transformedPhotoUrl || photo.rawPhotoUrl}
+                              alt={photo.guestName}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+
+                          {/* EXACT cost from OpenRouter ONLY for generated image, placed right below the image */}
+                          {photo.transformedPhotoUrl && typeof photo.apiCost === 'number' && photo.apiCost > 0 ? (
+                            <span
+                              className="mt-1 text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded bg-amber-100 text-amber-950 border border-amber-400 shadow-xs flex items-center gap-0.5 whitespace-nowrap"
+                              title={`Exact OpenRouter Billed Fee: $${photo.apiCost.toFixed(4)}`}
+                            >
+                              <span>⚡</span>
+                              <span>${photo.apiCost < 0.01 ? photo.apiCost.toFixed(4) : photo.apiCost.toFixed(3)}</span>
+                            </span>
+                          ) : null}
                         </div>
 
                         <div className="flex-1 min-w-0">
@@ -1363,15 +1379,9 @@ export default function OperatorDashboard() {
                               {photo.ticketNumber}
                             </span>
                             {photo.transformedPhotoUrl ? (
-                              <div className="flex items-center gap-1">
-                                <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-0.5" title="OpenRouter API generation fee">
-                                  <span>⚡</span>
-                                  <span>${(photo.apiCost ?? estimateCostForModel(photo.modelUsed || openRouterModel)).toFixed(3)}</span>
-                                </span>
-                                <span className="localflow-badge-green text-[9px] font-mono">
-                                  Ready
-                                </span>
-                              </div>
+                              <span className="localflow-badge-green text-[9px] font-mono">
+                                Ready
+                              </span>
                             ) : (
                               <span className="localflow-badge-orange text-[9px] font-mono animate-pulse">
                                 Waiting AI
@@ -1431,11 +1441,14 @@ export default function OperatorDashboard() {
                           <h4 className="font-serif text-lg font-bold leading-tight">
                             {selectedPhoto.guestName}
                           </h4>
-                          {selectedPhoto.transformedPhotoUrl && (
-                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1 shadow-xs">
+                          {selectedPhoto.transformedPhotoUrl && typeof selectedPhoto.apiCost === 'number' && selectedPhoto.apiCost > 0 && (
+                            <span
+                              className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-400 flex items-center gap-1 shadow-xs"
+                              title={`Exact OpenRouter Billed Fee: $${selectedPhoto.apiCost.toFixed(4)}`}
+                            >
                               <span>⚡</span>
                               <span>
-                                ${(selectedPhoto.apiCost ?? estimateCostForModel(selectedPhoto.modelUsed || openRouterModel)).toFixed(3)} API Fee
+                                ${selectedPhoto.apiCost < 0.01 ? selectedPhoto.apiCost.toFixed(4) : selectedPhoto.apiCost.toFixed(3)} API Fee
                               </span>
                             </span>
                           )}
@@ -1742,15 +1755,28 @@ export default function OperatorDashboard() {
                         </div>
 
                         {selectedPhoto.transformedPhotoUrl ? (
-                          <div className="relative aspect-[3/4] w-full rounded-lg overflow-hidden border-2 border-emerald-600 bg-ink-900">
-                            <img
-                              src={selectedPhoto.transformedPhotoUrl}
-                              alt="Transformed Branded"
-                              className="w-full h-full object-cover"
-                            />
-                            <div className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">
-                              ✓ Ready
+                          <div className="space-y-2">
+                            <div className="relative aspect-[3/4] w-full rounded-lg overflow-hidden border-2 border-emerald-600 bg-ink-900 shadow-xs">
+                              <img
+                                src={selectedPhoto.transformedPhotoUrl}
+                                alt="Transformed Branded"
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">
+                                ✓ Ready
+                              </div>
                             </div>
+                            {typeof selectedPhoto.apiCost === 'number' && selectedPhoto.apiCost > 0 && (
+                              <div className="flex items-center justify-between px-2.5 py-1.5 rounded bg-amber-50 border border-amber-300 text-amber-950 font-mono text-[11px] shadow-xs">
+                                <span className="font-semibold flex items-center gap-1">
+                                  <span>⚡</span>
+                                  <span>OpenRouter Fee:</span>
+                                </span>
+                                <span className="font-extrabold text-xs">
+                                  ${selectedPhoto.apiCost < 0.01 ? selectedPhoto.apiCost.toFixed(4) : selectedPhoto.apiCost.toFixed(3)}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div
@@ -2494,7 +2520,7 @@ export default function OperatorDashboard() {
                     Generation Ledger & Audit Trail
                   </h4>
                   <p className="text-xs text-ink-500 font-mono">
-                    Per-photo generation audit showing exact billed/estimated API fee.
+                    Per-photo generation audit showing exact billed OpenRouter API fee.
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -2544,9 +2570,9 @@ export default function OperatorDashboard() {
                     <tbody className="divide-y divide-ink-900/10">
                       {transformedPhotosList.map((photo) => {
                         const era = getStyleById(photo.styleId);
-                        const fee = typeof photo.apiCost === 'number'
+                        const fee = typeof photo.apiCost === 'number' && photo.apiCost > 0
                           ? photo.apiCost
-                          : estimateCostForModel(photo.modelUsed || openRouterModel);
+                          : null;
                         const modelName = photo.modelUsed || openRouterModel;
                         const timeStr = photo.updatedAt || photo.createdAt
                           ? new Date(photo.updatedAt || photo.createdAt).toLocaleTimeString([], {
@@ -2579,8 +2605,8 @@ export default function OperatorDashboard() {
                             <td className="p-2.5 text-ink-500 text-[11px]">
                               {timeStr}
                             </td>
-                            <td className="p-2.5 text-right font-bold text-emerald-800">
-                              ${fee.toFixed(3)}
+                            <td className="p-2.5 text-right font-bold text-emerald-800 font-mono">
+                              {fee !== null ? `$${fee < 0.01 ? fee.toFixed(4) : fee.toFixed(3)}` : <span className="text-ink-400 font-normal">—</span>}
                             </td>
                             <td className="p-2.5 text-right">
                               <button
