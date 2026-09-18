@@ -2110,12 +2110,11 @@ export default function OperatorDashboard() {
                 </p>
               </div>
 
-              {/* Model Selector */}
-              {/* Model Selector — 3 Lowest Cost Levels */}
+              {/* Model Selector — Lowest Cost Levels */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-mono font-bold uppercase text-ink-700 block">
-                    AI Model Level (3 Lowest Cost Options):
+                    AI Model Level (Lowest Cost Options):
                   </label>
                   <button
                     type="button"
@@ -2127,7 +2126,7 @@ export default function OperatorDashboard() {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {OPENROUTER_MODEL_TIERS.map((tier) => {
                     const isCurrent = openRouterModel === tier.id;
                     return (
@@ -2361,13 +2360,13 @@ export default function OperatorDashboard() {
               </div>
             </div>
 
-            {/* THE 3 LOWEST LEVELS MODEL SELECTION SHOWCASE */}
+            {/* LOWEST LEVELS MODEL SELECTION SHOWCASE */}
             <div className="localflow-card p-6 bg-white border-2 border-ink-900 shadow-brutal space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-ink-900/10 pb-3">
                 <div>
                   <div className="flex items-center gap-2">
                     <h4 className="font-serif text-lg font-bold text-ink-900">
-                      OpenRouter Model Selection — 3 Lowest Cost Levels
+                      OpenRouter Model Selection — Lowest Cost Levels
                     </h4>
                     <span className="localflow-badge-green text-[10px] font-mono font-bold uppercase">
                       Ranked by Budget
@@ -2383,8 +2382,8 @@ export default function OperatorDashboard() {
                 </span>
               </div>
 
-              {/* 3 Model Tier Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Model Tier Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {OPENROUTER_MODEL_TIERS.map((tier) => {
                   const isCurrent = openRouterModel === tier.id;
                   return (

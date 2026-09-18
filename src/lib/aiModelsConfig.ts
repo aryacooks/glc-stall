@@ -1,5 +1,5 @@
 export interface AIModelTier {
-  level: 1 | 2 | 3;
+  level: number;
   id: string;
   name: string;
   shortName: string;
@@ -50,26 +50,10 @@ export const OPENROUTER_MODEL_TIERS: AIModelTier[] = [
     bestFor: 'The festival kiosk sweet spot! Preserves guest facial identity and likeness while heavily transforming background and attire.',
     accentColor: '#8B5CF6', // Purple
   },
-  {
-    level: 3,
-    id: 'openai/gpt-5-image',
-    name: 'OpenAI GPT-5 Image (Full)',
-    shortName: 'gpt-5-image',
-    tierLabel: 'Level 3: Pro Precision (Maximum Detail)',
-    costPerImage: 0.040,
-    costDisplay: '$0.040 / img',
-    accuracyRating: '⭐⭐⭐⭐⭐ Maximum Realism',
-    accuracyScore: 98,
-    speedDisplay: '⏳ Deep Synthesis',
-    latencySeconds: '~7 - 10 sec',
-    description: 'Top-tier photorealistic fidelity and micro-detail. Cinematic lighting, fine skin textures, and hyper-detailed multi-element scenes.',
-    bestFor: 'VIP guests, exhibition showpieces, intricate costumes, and high-resolution large display projections (~4.0 cents per photo).',
-    accentColor: '#F59E0B', // Amber
-  },
 ];
 
 export function getModelTierByLevel(level: number): AIModelTier {
-  return OPENROUTER_MODEL_TIERS.find(t => t.level === level) || OPENROUTER_MODEL_TIERS[1];
+  return OPENROUTER_MODEL_TIERS.find(t => t.level === level) || OPENROUTER_MODEL_TIERS[0];
 }
 
 export function getModelTierById(id: string): AIModelTier | undefined {
