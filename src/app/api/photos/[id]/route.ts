@@ -74,10 +74,18 @@ export async function PATCH(
     // Update in Supabase DB if available
     if (supabaseAdmin) {
       try {
-        await supabaseAdmin
+        const { error } = await supabaseAdmin
           .from('nexora_photos')
           .update(updates)
           .eq('id', id);
+        if (error) {
+          // If custom column is missing in Supabase schema, retry with core fields only
+          const { apiCost, modelUsed, ...coreUpdates } = updates as any;
+          await supabaseAdmin
+            .from('nexora_photos')
+            .update(coreUpdates)
+            .eq('id', id);
+        }
       } catch (err) {
         console.warn('DB update failed:', err);
       }

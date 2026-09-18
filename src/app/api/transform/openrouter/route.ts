@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { estimateCostForModel } from '@/lib/aiModelsConfig';
 
 export const maxDuration = 60; // Allow sufficient time for image generation on edge/serverless
 
@@ -19,27 +20,34 @@ export async function POST(req: Request) {
       );
     }
 
-    // Action 1: Test API Key connection
-    if (body.action === 'test') {
-      const testRes = await fetch('https://openrouter.ai/api/v1/auth/key', {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-      });
+    // Action 1: Test API Key connection & fetch account usage/limits
+    if (body.action === 'test' || body.action === 'key_info') {
+      try {
+        const testRes = await fetch('https://openrouter.ai/api/v1/auth/key', {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+          },
+        });
 
-      const testData = await testRes.json();
-      if (!testRes.ok) {
+        const testData = await testRes.json();
+        if (!testRes.ok) {
+          return NextResponse.json(
+            { success: false, error: testData.error?.message || 'Invalid OpenRouter API Key.' },
+            { status: testRes.status }
+          );
+        }
+
+        return NextResponse.json({
+          success: true,
+          message: 'OpenRouter API Key is valid and connected!',
+          keyInfo: testData.data,
+        });
+      } catch (err: any) {
         return NextResponse.json(
-          { success: false, error: testData.error?.message || 'Invalid OpenRouter API Key.' },
-          { status: testRes.status }
+          { success: false, error: err.message || 'Failed to connect to OpenRouter key verification endpoint.' },
+          { status: 502 }
         );
       }
-
-      return NextResponse.json({
-        success: true,
-        message: 'OpenRouter API Key is valid and connected!',
-        keyInfo: testData.data,
-      });
     }
 
     // Action 2: Image Transformation
@@ -53,6 +61,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: 'Transformation prompt is required.' }, { status: 400 });
     }
 
+    const fallbackCost = estimateCostForModel(model);
     const origin = req.headers.get('origin') || req.headers.get('host') || 'http://localhost:3000';
     const siteUrl = origin.startsWith('http') ? origin : `https://${origin}`;
 
@@ -76,9 +85,17 @@ export async function POST(req: Request) {
       if (imagesRes.ok) {
         const json = await imagesRes.json();
         const item = json.data?.[0];
+        const cost = json.usage?.cost ?? json.cost ?? fallbackCost;
         if (item) {
           if (item.url) {
-            return NextResponse.json({ success: true, imageUrl: item.url, model, method: 'images' });
+            return NextResponse.json({
+              success: true,
+              imageUrl: item.url,
+              model,
+              cost: Number(cost),
+              usage: json.usage,
+              method: 'images',
+            });
           }
           if (item.b64_json) {
             const mediaType = item.media_type || 'image/png';
@@ -86,6 +103,8 @@ export async function POST(req: Request) {
               success: true,
               imageUrl: `data:${mediaType};base64,${item.b64_json}`,
               model,
+              cost: Number(cost),
+              usage: json.usage,
               method: 'images',
             });
           }
@@ -132,6 +151,12 @@ export async function POST(req: Request) {
     const choice = chatData.choices?.[0];
     const message = choice?.message;
 
+    // Calculate actual cost or fallback
+    const reportedCost = chatData.usage?.cost ?? chatData.usage?.total_cost ?? chatData.cost;
+    const finalCost = typeof reportedCost === 'number' && reportedCost > 0
+      ? reportedCost
+      : fallbackCost;
+
     // Check for images in message.images array
     if (message?.images && Array.isArray(message.images) && message.images.length > 0) {
       const imgItem = message.images[0];
@@ -141,6 +166,8 @@ export async function POST(req: Request) {
           success: true,
           imageUrl: imgUrl.startsWith('data:') || imgUrl.startsWith('http') ? imgUrl : `data:image/png;base64,${imgUrl}`,
           model,
+          cost: Number(finalCost),
+          usage: chatData.usage,
           method: 'chat.images',
         });
       }
@@ -152,27 +179,62 @@ export async function POST(req: Request) {
       // 1. Data URL
       const dataUriMatch = content.match(/data:image\/[a-zA-Z0-9+]+;base64,[A-Za-z0-9+/=]+/);
       if (dataUriMatch) {
-        return NextResponse.json({ success: true, imageUrl: dataUriMatch[0], model, method: 'chat.content_data_uri' });
+        return NextResponse.json({
+          success: true,
+          imageUrl: dataUriMatch[0],
+          model,
+          cost: Number(finalCost),
+          usage: chatData.usage,
+          method: 'chat.content_data_uri',
+        });
       }
 
       // 2. Markdown image ![alt](url)
       const mdMatch = content.match(/!\[.*?\]\((https?:\/\/[^\s)]+)\)/);
       if (mdMatch) {
-        return NextResponse.json({ success: true, imageUrl: mdMatch[1], model, method: 'chat.content_markdown' });
+        return NextResponse.json({
+          success: true,
+          imageUrl: mdMatch[1],
+          model,
+          cost: Number(finalCost),
+          usage: chatData.usage,
+          method: 'chat.content_markdown',
+        });
       }
 
       // 3. Raw URL
       const urlMatch = content.match(/https?:\/\/[^\s"'\\]+\.(?:png|jpe?g|webp|gif)/i);
       if (urlMatch) {
-        return NextResponse.json({ success: true, imageUrl: urlMatch[0], model, method: 'chat.content_url' });
+        return NextResponse.json({
+          success: true,
+          imageUrl: urlMatch[0],
+          model,
+          cost: Number(finalCost),
+          usage: chatData.usage,
+          method: 'chat.content_url',
+        });
       }
     } else if (Array.isArray(content)) {
       for (const part of content) {
         if (part.type === 'image_url' && part.image_url?.url) {
-          return NextResponse.json({ success: true, imageUrl: part.image_url.url, model, method: 'chat.content_part' });
+          return NextResponse.json({
+            success: true,
+            imageUrl: part.image_url.url,
+            model,
+            cost: Number(finalCost),
+            usage: chatData.usage,
+            method: 'chat.content_part',
+          });
         }
         if (part.type === 'image' && (part.image || part.url)) {
-          return NextResponse.json({ success: true, imageUrl: part.image || part.url, model, method: 'chat.content_part' });
+          return NextResponse.json({
+            success: true,
+            imageUrl: part.image || part.url,
+            model,
+            cost: Number(finalCost),
+            usage: chatData.usage,
+            method: 'chat.content_part',
+          });
         }
       }
     }

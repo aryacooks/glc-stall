@@ -200,10 +200,18 @@ export const StorageService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        await supabase
+        const { error } = await supabase
           .from('nexora_photos')
           .update(updates)
           .eq('id', id);
+        if (error) {
+          // If custom column is missing in Supabase schema, retry with core fields only
+          const { apiCost, modelUsed, ...coreUpdates } = updates as any;
+          await supabase
+            .from('nexora_photos')
+            .update(coreUpdates)
+            .eq('id', id);
+        }
       } catch (err) {
         console.warn('Supabase update failed', err);
       }

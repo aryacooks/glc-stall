@@ -6,15 +6,20 @@ import {
   Tv, MonitorPlay, Image as ImageIcon, Upload, FileText, CheckCircle2,
   Clock, Flame, Layers, ExternalLink, Sliders, AlertCircle, Settings,
   Palette, Camera, X, Clipboard, Plus, Trash2, Download,
-  Bot, Key, Power, CheckCircle, Eye, EyeOff, Zap
+  Bot, Key, Power, CheckCircle, Eye, EyeOff, Zap,
+  BarChart3, DollarSign, Activity, TrendingUp, Coins, Receipt, HelpCircle, ShieldCheck
 } from 'lucide-react';
 import { getAllThemes, getStyleById, saveCustomTheme, deleteCustomTheme } from '@/lib/stylesConfig';
 import { GuestPhoto, PhotoStatus, EraStyleId, StyleEra, StyleCategory } from '@/lib/types';
+import { 
+  OPENROUTER_MODEL_TIERS, getModelTierByLevel, getModelTierById, 
+  estimateCostForModel, AIModelTier, GenerationUsageRecord 
+} from '@/lib/aiModelsConfig';
 import { StorageService } from '@/lib/storageService';
 import Link from 'next/link';
 
 export default function OperatorDashboard() {
-  const [activeTab, setActiveTab] = useState<'queue' | 'prompts' | 'settings'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'usage' | 'prompts' | 'settings'>('queue');
   const [photos, setPhotos] = useState<GuestPhoto[]>([]);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null);
@@ -39,6 +44,15 @@ export default function OperatorDashboard() {
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [keyTestResult, setKeyTestResult] = useState<{ valid: boolean; message: string } | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [usageLog, setUsageLog] = useState<GenerationUsageRecord[]>([]);
+  const [openRouterKeyInfo, setOpenRouterKeyInfo] = useState<{
+    label?: string;
+    usage?: number;
+    limit?: number;
+    limit_remaining?: number;
+    is_free_tier?: boolean;
+  } | null>(null);
+  const [isRefreshingKeyInfo, setIsRefreshingKeyInfo] = useState(false);
 
   // Synchronous refs for event listeners and background triggers
   const openRouterApiKeyRef = useRef('');
@@ -82,12 +96,26 @@ export default function OperatorDashboard() {
       const savedKey = localStorage.getItem('nexora_openrouter_api_key') || '';
       const savedModel = localStorage.getItem('nexora_openrouter_model') || 'openai/gpt-image-2.5-flare';
       const savedAuto = localStorage.getItem('nexora_openrouter_auto_transform') === 'true';
+      const savedUsageLog = localStorage.getItem('nexora_openrouter_usage_log');
+      
       setOpenRouterApiKey(savedKey);
       openRouterApiKeyRef.current = savedKey;
       setOpenRouterModel(savedModel);
       openRouterModelRef.current = savedModel;
       setAutoTransformEnabled(savedAuto);
       autoTransformEnabledRef.current = savedAuto;
+
+      if (savedUsageLog) {
+        try {
+          setUsageLog(JSON.parse(savedUsageLog));
+        } catch (e) {
+          console.warn('Failed to parse saved usage log', e);
+        }
+      }
+
+      if (savedKey) {
+        refreshKeyInfo(savedKey);
+      }
     }
     loadThemesList();
     refreshPhotos();
@@ -127,13 +155,50 @@ export default function OperatorDashboard() {
     };
   }, []);
 
-  // OpenRouter Settings Helpers
+  // OpenRouter Settings & Usage Helpers
+  const refreshKeyInfo = async (explicitKey?: string) => {
+    const key = (explicitKey || openRouterApiKey || openRouterApiKeyRef.current || '').trim();
+    if (!key) return;
+    setIsRefreshingKeyInfo(true);
+    try {
+      const res = await fetch('/api/transform/openrouter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: key,
+          action: 'key_info',
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.keyInfo) {
+        setOpenRouterKeyInfo(data.keyInfo);
+      }
+    } catch (e: any) {
+      console.warn('Failed to query OpenRouter key balance', e);
+    } finally {
+      setIsRefreshingKeyInfo(false);
+    }
+  };
+
+  const handleClearUsageLog = () => {
+    if (confirm('Reset stall session usage telemetry and generation history?')) {
+      setUsageLog([]);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('nexora_openrouter_usage_log');
+      }
+      showNotification('Stall session usage stats reset!');
+    }
+  };
+
   const handleUpdateApiKey = (key: string) => {
     setOpenRouterApiKey(key);
     openRouterApiKeyRef.current = key;
     setKeyTestResult(null);
     if (typeof window !== 'undefined') {
       localStorage.setItem('nexora_openrouter_api_key', key);
+    }
+    if (key.trim().length > 15) {
+      refreshKeyInfo(key.trim());
     }
   };
 
@@ -174,6 +239,9 @@ export default function OperatorDashboard() {
       const data = await res.json();
       if (res.ok && data.success) {
         const label = data.keyInfo?.label || 'OpenRouter';
+        if (data.keyInfo) {
+          setOpenRouterKeyInfo(data.keyInfo);
+        }
         setKeyTestResult({
           valid: true,
           message: `Connected! (${label}${data.keyInfo?.limit ? ` · Limit: $${data.keyInfo.limit}` : ''})`,
@@ -248,11 +316,36 @@ export default function OperatorDashboard() {
       // Apply watermark
       const watermarked = await StorageService.applyWatermark(data.imageUrl, eraStyle.name);
 
+      const cost = typeof data.cost === 'number' ? data.cost : estimateCostForModel(openRouterModelRef.current);
+
       // Save to Supabase and local storage
       const updated = await StorageService.updatePhoto(photo.id, {
         transformedPhotoUrl: watermarked,
         status: 'ready',
         statusMessage: `AI Transformed by ${openRouterModelRef.current} (${eraStyle.name})`,
+        apiCost: cost,
+        modelUsed: openRouterModelRef.current,
+      });
+
+      // Append to local usage log
+      const newLogRecord: GenerationUsageRecord = {
+        id: `gen_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        photoId: photo.id,
+        ticketNumber: photo.ticketNumber,
+        guestName: photo.guestName,
+        styleName: eraStyle.name,
+        model: openRouterModelRef.current,
+        cost: cost,
+        timestamp: Date.now(),
+        method: data.method || (isAuto ? 'auto' : 'manual'),
+      };
+
+      setUsageLog((prev) => {
+        const next = [newLogRecord, ...prev];
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('nexora_openrouter_usage_log', JSON.stringify(next));
+        }
+        return next;
       });
 
       refreshPhotos();
@@ -264,10 +357,10 @@ export default function OperatorDashboard() {
             type: 'PHOTO_TRANSFORMED',
             payload: updated,
           });
-          showNotification(`✨ Auto-AI complete: ${photo.guestName} revealed on TV!`);
+          showNotification(`✨ Auto-AI complete: ${photo.guestName} revealed on TV! ($${cost.toFixed(3)})`);
         }
       } else {
-        showNotification(`✨ Flare AI transformation complete! Click "Show Transition on TV" below.`);
+        showNotification(`✨ AI transform complete: ${photo.guestName} ($${cost.toFixed(3)}). Ready for TV!`);
       }
 
       return true;
@@ -299,6 +392,41 @@ export default function OperatorDashboard() {
 
   const selectedPhoto = photos.find(p => p.id === selectedPhotoId) || photos[0];
   const selectedEra = selectedPhoto ? getStyleById(selectedPhoto.styleId) : (themes[0] || getAllThemes()[0]);
+
+  // Usage and Cost Statistics
+  const transformedPhotosList = photos.filter((p) => !!p.transformedPhotoUrl);
+  const totalGenerationsCount = Math.max(transformedPhotosList.length, usageLog.length);
+
+  const totalStallCost = photos.reduce((acc, p) => {
+    if (!p.transformedPhotoUrl) return acc;
+    const itemCost = typeof p.apiCost === 'number' ? p.apiCost : estimateCostForModel(p.modelUsed || openRouterModel);
+    return acc + itemCost;
+  }, 0);
+
+  const averageCostPerImage = transformedPhotosList.length > 0 ? totalStallCost / transformedPhotosList.length : 0;
+
+  // Active Tier configuration
+  const activeTier = getModelTierById(openRouterModel) || {
+    level: 2 as const,
+    id: openRouterModel,
+    name: openRouterModel,
+    shortName: openRouterModel.split('/').pop() || 'custom',
+    tierLabel: 'Custom Model Tier',
+    costPerImage: estimateCostForModel(openRouterModel),
+    costDisplay: `$${estimateCostForModel(openRouterModel).toFixed(3)} / img`,
+    accuracyRating: '⭐⭐⭐⭐ Custom Configuration',
+    accuracyScore: 90,
+    speedDisplay: '⚡ Variable Latency',
+    latencySeconds: '~4 - 6 sec',
+    description: 'Custom user-specified OpenRouter model identifier.',
+    bestFor: 'Specialized testing with any model on openrouter.ai.',
+    accentColor: '#3B82F6',
+  };
+
+  const handleSelectTier = (tier: AIModelTier) => {
+    handleUpdateModel(tier.id);
+    showNotification(`Switched to ${tier.tierLabel} (${tier.costDisplay})`);
+  };
 
   // Delete photo from queue
   const handleDeletePhoto = async (id: string, e?: React.MouseEvent) => {
@@ -983,6 +1111,27 @@ export default function OperatorDashboard() {
             </button>
 
             <button
+              onClick={() => setActiveTab('usage')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border-2 transition-all ${
+                activeTab === 'usage'
+                  ? 'bg-purple-700 text-white border-ink-900 shadow-brutal-sm font-bold'
+                  : 'bg-transparent text-ink-700 border-transparent hover:bg-canvas-hover'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <BarChart3 className={`w-4 h-4 ${activeTab === 'usage' ? 'text-white' : 'text-purple-600'}`} />
+                <span className="font-semibold">Usage & Costs</span>
+              </div>
+              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                activeTab === 'usage'
+                  ? 'bg-black/20 text-white border-white/30'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+              }`}>
+                ${totalStallCost.toFixed(2)}
+              </span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('prompts')}
               className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl border-2 transition-all ${
                 activeTab === 'prompts'
@@ -1151,9 +1300,15 @@ export default function OperatorDashboard() {
                               {photo.ticketNumber}
                             </span>
                             {photo.transformedPhotoUrl ? (
-                              <span className="localflow-badge-green text-[9px] font-mono">
-                                Ready
-                              </span>
+                              <div className="flex items-center gap-1">
+                                <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-0.5" title="OpenRouter API generation fee">
+                                  <span>⚡</span>
+                                  <span>${(photo.apiCost ?? estimateCostForModel(photo.modelUsed || openRouterModel)).toFixed(3)}</span>
+                                </span>
+                                <span className="localflow-badge-green text-[9px] font-mono">
+                                  Ready
+                                </span>
+                              </div>
                             ) : (
                               <span className="localflow-badge-orange text-[9px] font-mono animate-pulse">
                                 Waiting AI
@@ -1163,16 +1318,23 @@ export default function OperatorDashboard() {
                           <p className="text-xs font-semibold text-ink-800 truncate">
                             {photo.guestName}
                           </p>
-                          <span
-                            className="inline-block text-[10px] font-mono uppercase px-1.5 rounded border mt-0.5"
-                            style={{
-                              backgroundColor: `${era.badgeColor}15`,
-                              color: era.accentColor,
-                              borderColor: `${era.badgeColor}40`,
-                            }}
-                          >
-                            {era.name}
-                          </span>
+                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                            <span
+                              className="inline-block text-[10px] font-mono uppercase px-1.5 rounded border"
+                              style={{
+                                backgroundColor: `${era.badgeColor}15`,
+                                color: era.accentColor,
+                                borderColor: `${era.badgeColor}40`,
+                              }}
+                            >
+                              {era.name}
+                            </span>
+                            {photo.modelUsed && (
+                              <span className="text-[9px] font-mono text-purple-800 bg-purple-100 px-1 rounded border border-purple-200 truncate max-w-[80px]">
+                                {photo.modelUsed.split('/').pop()}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         {/* Delete Button on Queue Card */}
@@ -1202,14 +1364,29 @@ export default function OperatorDashboard() {
                         {selectedPhoto.ticketNumber}
                       </span>
                       <div>
-                        <h4 className="font-serif text-lg font-bold leading-tight">
-                          {selectedPhoto.guestName}
-                        </h4>
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-serif text-lg font-bold leading-tight">
+                            {selectedPhoto.guestName}
+                          </h4>
+                          {selectedPhoto.transformedPhotoUrl && (
+                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1 shadow-xs">
+                              <span>⚡</span>
+                              <span>
+                                ${(selectedPhoto.apiCost ?? estimateCostForModel(selectedPhoto.modelUsed || openRouterModel)).toFixed(3)} API Fee
+                              </span>
+                            </span>
+                          )}
+                        </div>
                         <span className="text-[11px] font-mono text-ink-500">
                           Selected {selectedEra.category === 'character' ? 'Character' : 'Theme'}:{' '}
                           <strong className={selectedEra.category === 'character' ? 'text-purple-700' : 'text-terracotta'}>
                             {selectedEra.name}
                           </strong>
+                          {selectedPhoto.modelUsed && (
+                            <span className="ml-2 text-[10px] font-mono text-purple-800 bg-purple-100 px-1.5 py-0.5 rounded border border-purple-200">
+                              {selectedPhoto.modelUsed.split('/').pop()}
+                            </span>
+                          )}
                         </span>
                       </div>
                     </div>
@@ -1345,21 +1522,37 @@ export default function OperatorDashboard() {
                         <Bot className="w-4 h-4" />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                           <span className="font-serif font-bold text-sm text-purple-950">
-                            OpenRouter AI Pipeline
+                            {activeTier.tierLabel}
                           </span>
                           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-200/80 text-purple-900 font-bold border border-purple-300">
                             {openRouterModel.split('/').pop()}
                           </span>
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                            {activeTier.costDisplay}
+                          </span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
+                            {activeTier.accuracyScore}% Likeness
+                          </span>
                         </div>
                         <p className="text-[11px] font-mono text-purple-800 mt-0.5">
-                          Direct AI generation with photo & prompt. No manual copy-paste needed!
+                          {activeTier.speedDisplay} ({activeTier.latencySeconds}) · 1-click automatic styling with stall watermark.
                         </p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('usage')}
+                        className="localflow-btn-secondary text-[11px] py-2 px-2.5 font-mono hidden sm:flex items-center gap-1 text-purple-800 border-purple-300 hover:bg-purple-100"
+                        title="Change model tier or view usage telemetry"
+                      >
+                        <Sliders className="w-3 h-3" />
+                        <span>Tiers</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={handleManualAiTransform}
@@ -1829,45 +2022,86 @@ export default function OperatorDashboard() {
               </div>
 
               {/* Model Selector */}
-              <div className="space-y-2">
-                <label className="text-xs font-mono font-bold uppercase text-ink-700 block">
-                  Model Selection:
-                </label>
-                <div className="flex flex-wrap gap-2">
+              {/* Model Selector — 3 Lowest Cost Levels */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-mono font-bold uppercase text-ink-700 block">
+                    AI Model Level (3 Lowest Cost Options):
+                  </label>
                   <button
                     type="button"
-                    onClick={() => handleUpdateModel('openai/gpt-image-2.5-flare')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border transition-all flex items-center gap-1.5 ${
-                      openRouterModel === 'openai/gpt-image-2.5-flare'
-                        ? 'bg-purple-600 text-white border-ink-900 shadow-sm'
-                        : 'bg-canvas border-ink-900/20 text-ink-700 hover:border-ink-900'
-                    }`}
+                    onClick={() => setActiveTab('usage')}
+                    className="text-[11px] font-mono font-bold text-purple-700 hover:underline flex items-center gap-1"
                   >
-                    <span>⚡ gpt-image-2.5-flare</span>
-                    <span className="text-[10px] opacity-80">(Speed Tier / Recommended)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleUpdateModel('openai/gpt-image-2.5-sunburst')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border transition-all flex items-center gap-1.5 ${
-                      openRouterModel === 'openai/gpt-image-2.5-sunburst'
-                        ? 'bg-purple-600 text-white border-ink-900 shadow-sm'
-                        : 'bg-canvas border-ink-900/20 text-ink-700 hover:border-ink-900'
-                    }`}
-                  >
-                    <span>🎨 gpt-image-2.5-sunburst</span>
-                    <span className="text-[10px] opacity-80">(High Precision)</span>
+                    <span>View Usage & Cost Telemetry</span>
+                    <span>→</span>
                   </button>
                 </div>
 
-                <input
-                  type="text"
-                  value={openRouterModel}
-                  onChange={(e) => handleUpdateModel(e.target.value)}
-                  placeholder="Custom model ID (e.g. openai/gpt-image-2.5-flare)"
-                  className="w-full text-xs font-mono bg-canvas border border-ink-900/30 rounded-lg px-3 py-2 mt-1 focus:outline-none focus:border-terracotta"
-                />
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {OPENROUTER_MODEL_TIERS.map((tier) => {
+                    const isCurrent = openRouterModel === tier.id;
+                    return (
+                      <button
+                        key={tier.id}
+                        type="button"
+                        onClick={() => handleSelectTier(tier)}
+                        className={`p-3 rounded-xl border-2 text-left transition-all relative flex flex-col justify-between ${
+                          isCurrent
+                            ? 'bg-purple-50/70 border-purple-900 shadow-brutal-sm ring-2 ring-purple-600'
+                            : 'bg-white border-ink-900/20 hover:border-ink-900'
+                        }`}
+                      >
+                        {tier.recommendedBadge && (
+                          <span className="absolute -top-2.5 right-2 bg-terracotta text-white font-mono text-[8px] font-bold uppercase px-1.5 py-0.5 rounded border border-ink-900 shadow-xs">
+                            Recommended
+                          </span>
+                        )}
+
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold uppercase text-ink-700">
+                              Level {tier.level}
+                            </span>
+                            <span className="font-mono text-xs font-extrabold text-emerald-800">
+                              {tier.costDisplay}
+                            </span>
+                          </div>
+
+                          <div className="font-serif font-bold text-xs text-ink-900 leading-tight">
+                            {tier.name}
+                          </div>
+
+                          <div className="text-[10px] font-mono text-ink-500">
+                            Accuracy: <strong className="text-ink-900">{tier.accuracyScore}%</strong> · {tier.speedDisplay}
+                          </div>
+                        </div>
+
+                        <div className="mt-2.5 pt-2 border-t border-ink-900/10 flex items-center justify-between text-[10px] font-mono font-bold">
+                          <span className={isCurrent ? 'text-purple-700' : 'text-ink-500'}>
+                            {isCurrent ? '✓ Active' : 'Click to select'}
+                          </span>
+                          <span className="text-[9px] text-ink-400 font-normal">
+                            {tier.latencySeconds}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-mono text-ink-500 block mb-1">
+                    Or custom model ID:
+                  </label>
+                  <input
+                    type="text"
+                    value={openRouterModel}
+                    onChange={(e) => handleUpdateModel(e.target.value)}
+                    placeholder="Custom model ID (e.g. openai/gpt-image-2.5-flare)"
+                    className="w-full text-xs font-mono bg-canvas border border-ink-900/30 rounded-lg px-3 py-2 focus:outline-none focus:border-terracotta"
+                  />
+                </div>
               </div>
 
               {/* Auto-Transform New Arrivals Switch */}
@@ -1923,6 +2157,356 @@ export default function OperatorDashboard() {
               >
                 Clear Queue Storage
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* USAGE & COST TELEMETRY DASHBOARD TAB */}
+        {activeTab === 'usage' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="localflow-badge-orange text-[10px] font-mono uppercase font-bold">
+                    OpenRouter Telemetry
+                  </span>
+                  <span className="text-xs font-mono text-ink-500">Live API Metering</span>
+                </div>
+                <h3 className="font-serif text-2xl font-bold">Usage & Cost Dashboard</h3>
+                <p className="text-xs text-ink-500 font-mono">
+                  Monitor transformations generated, exact API billing, credit limits, and model cost tiers.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => refreshKeyInfo()}
+                  disabled={isRefreshingKeyInfo || !openRouterApiKey.trim()}
+                  className="localflow-btn-secondary text-xs px-3.5 py-2 flex items-center gap-1.5 font-mono"
+                  title="Check latest credits and limit from OpenRouter API"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingKeyInfo ? 'animate-spin' : ''}`} />
+                  <span>Refresh Balance</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleClearUsageLog}
+                  className="localflow-btn-secondary text-xs px-3 py-2 text-rose-700 border-rose-300 hover:bg-rose-50 font-mono"
+                  title="Reset stall session counter"
+                >
+                  Reset Session
+                </button>
+              </div>
+            </div>
+
+            {/* 4 TOP KPI METRIC CARDS */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Card 1: Total Spend */}
+              <div className="localflow-card p-5 bg-white border-2 border-ink-900 shadow-brutal-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold uppercase text-ink-500">Stall Total Spend</span>
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 border border-ink-900 flex items-center justify-center text-emerald-800">
+                    <DollarSign className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="font-serif text-3xl font-extrabold text-ink-900 tracking-tight">
+                  ${totalStallCost.toFixed(3)}
+                </div>
+                <p className="text-[11px] font-mono text-ink-500">
+                  Total generated across {transformedPhotosList.length} guest photos
+                </p>
+              </div>
+
+              {/* Card 2: Photos Synthesized */}
+              <div className="localflow-card p-5 bg-white border-2 border-ink-900 shadow-brutal-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold uppercase text-ink-500">AI Synthesized</span>
+                  <div className="w-8 h-8 rounded-lg bg-purple-100 border border-ink-900 flex items-center justify-center text-purple-800">
+                    <Bot className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="font-serif text-3xl font-extrabold text-ink-900 tracking-tight">
+                  {transformedPhotosList.length} <span className="text-sm font-mono text-ink-500 font-normal">photos</span>
+                </div>
+                <p className="text-[11px] font-mono text-ink-500">
+                  {photos.length - transformedPhotosList.length} remaining in queue
+                </p>
+              </div>
+
+              {/* Card 3: Avg Cost Per Guest */}
+              <div className="localflow-card p-5 bg-white border-2 border-ink-900 shadow-brutal-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold uppercase text-ink-500">Avg Cost / Photo</span>
+                  <div className="w-8 h-8 rounded-lg bg-amber-100 border border-ink-900 flex items-center justify-center text-amber-800">
+                    <Receipt className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="font-serif text-3xl font-extrabold text-ink-900 tracking-tight">
+                  ${averageCostPerImage.toFixed(3)}
+                </div>
+                <p className="text-[11px] font-mono text-ink-500">
+                  Active Tier: {activeTier.costDisplay}
+                </p>
+              </div>
+
+              {/* Card 4: OpenRouter Account Balance */}
+              <div className="localflow-card p-5 bg-white border-2 border-ink-900 shadow-brutal-sm space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold uppercase text-ink-500">Account Credits</span>
+                  <div className="w-8 h-8 rounded-lg bg-sky-100 border border-ink-900 flex items-center justify-center text-sky-800">
+                    <Key className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="font-serif text-2xl font-extrabold text-ink-900 tracking-tight truncate">
+                  {openRouterKeyInfo?.limit_remaining != null
+                    ? `$${openRouterKeyInfo.limit_remaining.toFixed(2)}`
+                    : openRouterApiKey.trim() ? 'Active / Unlimited' : 'No Key Set'}
+                </div>
+                <p className="text-[11px] font-mono text-ink-500 truncate">
+                  {openRouterKeyInfo?.usage != null
+                    ? `Key Spend: $${openRouterKeyInfo.usage.toFixed(2)}${openRouterKeyInfo.limit ? ` / $${openRouterKeyInfo.limit}` : ''}`
+                    : 'Configure in Settings'}
+                </p>
+              </div>
+            </div>
+
+            {/* THE 3 LOWEST LEVELS MODEL SELECTION SHOWCASE */}
+            <div className="localflow-card p-6 bg-white border-2 border-ink-900 shadow-brutal space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-ink-900/10 pb-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-serif text-lg font-bold text-ink-900">
+                      OpenRouter Model Selection — 3 Lowest Cost Levels
+                    </h4>
+                    <span className="localflow-badge-green text-[10px] font-mono font-bold uppercase">
+                      Ranked by Budget
+                    </span>
+                  </div>
+                  <p className="text-xs text-ink-600 font-mono mt-0.5">
+                    Click any level below to activate it for upcoming 1-click & auto-transformations.
+                  </p>
+                </div>
+
+                <span className="text-xs font-mono bg-purple-50 text-purple-800 border border-purple-300 px-2.5 py-1 rounded-lg font-bold self-start sm:self-auto">
+                  Active: Level {activeTier.level} ({activeTier.shortName})
+                </span>
+              </div>
+
+              {/* 3 Model Tier Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {OPENROUTER_MODEL_TIERS.map((tier) => {
+                  const isCurrent = openRouterModel === tier.id;
+                  return (
+                    <div
+                      key={tier.id}
+                      onClick={() => handleSelectTier(tier)}
+                      className={`p-4 rounded-xl border-2 transition-all cursor-pointer flex flex-col justify-between relative ${
+                        isCurrent
+                          ? 'bg-purple-50/70 border-purple-900 shadow-brutal ring-2 ring-purple-600'
+                          : 'bg-white border-ink-900/20 hover:border-ink-900 hover:shadow-brutal-sm'
+                      }`}
+                    >
+                      {tier.recommendedBadge && (
+                        <div className="absolute -top-3 left-4 bg-terracotta text-white font-mono text-[9px] font-extrabold uppercase px-2 py-0.5 rounded shadow-xs border border-ink-900">
+                          {tier.recommendedBadge}
+                        </div>
+                      )}
+
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between pt-1">
+                          <span className={`text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded border ${
+                            tier.level === 1 ? 'bg-emerald-100 text-emerald-900 border-emerald-300' :
+                            tier.level === 2 ? 'bg-purple-100 text-purple-900 border-purple-300' :
+                            'bg-amber-100 text-amber-900 border-amber-300'
+                          }`}>
+                            Level {tier.level}
+                          </span>
+
+                          <span className="font-mono text-sm font-black text-ink-900">
+                            {tier.costDisplay}
+                          </span>
+                        </div>
+
+                        <div>
+                          <h5 className="font-serif font-bold text-base text-ink-900">
+                            {tier.name}
+                          </h5>
+                          <code className="text-[11px] font-mono text-ink-500 block truncate">
+                            {tier.id}
+                          </code>
+                        </div>
+
+                        {/* Accuracy Rating */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs font-mono">
+                            <span className="text-ink-600 font-bold">Accuracy / Likeness:</span>
+                            <span className="font-extrabold text-ink-900">{tier.accuracyScore}%</span>
+                          </div>
+                          <div className="w-full h-2 bg-ink-900/10 rounded-full overflow-hidden">
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${tier.accuracyScore}%`,
+                                backgroundColor: tier.accentColor,
+                              }}
+                            />
+                          </div>
+                          <p className="text-[10px] font-mono text-ink-500">{tier.accuracyRating}</p>
+                        </div>
+
+                        {/* Speed & Latency */}
+                        <div className="flex items-center justify-between text-xs font-mono py-1.5 px-2 rounded bg-canvas border border-ink-900/10">
+                          <span className="text-ink-600">Speed:</span>
+                          <span className="font-bold text-ink-900 flex items-center gap-1">
+                            {tier.speedDisplay} ({tier.latencySeconds})
+                          </span>
+                        </div>
+
+                        {/* Description & Best For */}
+                        <p className="text-xs text-ink-700 leading-snug">
+                          {tier.description}
+                        </p>
+
+                        <div className="p-2 bg-canvas rounded-lg text-[11px] font-mono text-ink-600 border border-ink-900/10">
+                          <strong>Best For:</strong> {tier.bestFor}
+                        </div>
+                      </div>
+
+                      {/* Select Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelectTier(tier);
+                        }}
+                        className={`mt-4 w-full py-2 px-3 rounded-lg text-xs font-mono font-bold border-2 transition-all flex items-center justify-center gap-1.5 ${
+                          isCurrent
+                            ? 'bg-purple-700 text-white border-ink-900 shadow-sm'
+                            : 'bg-white text-ink-800 border-ink-900/40 hover:border-ink-900'
+                        }`}
+                      >
+                        {isCurrent ? (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                            <span>✓ CURRENTLY ACTIVE</span>
+                          </>
+                        ) : (
+                          <span>Activate Level {tier.level}</span>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Custom Model Override */}
+              <div className="p-3.5 rounded-xl border border-ink-900/20 bg-canvas space-y-1.5">
+                <label className="text-xs font-mono font-bold uppercase text-ink-700 block">
+                  Custom OpenRouter Model ID (Advanced Override):
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={openRouterModel}
+                    onChange={(e) => handleUpdateModel(e.target.value)}
+                    placeholder="e.g. openai/gpt-image-2.5-flare, google/gemini-3.1-flash-image"
+                    className="flex-1 text-xs font-mono bg-white border border-ink-900/30 rounded-lg px-3 py-2 focus:outline-none focus:border-terracotta"
+                  />
+                  {getModelTierById(openRouterModel) && (
+                    <span className="text-xs font-mono bg-purple-100 text-purple-900 px-3 py-2 rounded-lg font-bold border border-purple-300 flex items-center">
+                      Mapped to Level {activeTier.level}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* RECENT GENERATIONS LEDGER TABLE */}
+            <div className="localflow-card p-6 bg-white border-2 border-ink-900 shadow-brutal space-y-4">
+              <div className="flex items-center justify-between border-b border-ink-900/10 pb-3">
+                <div>
+                  <h4 className="font-serif text-lg font-bold text-ink-900">
+                    Generation Ledger & Audit Trail
+                  </h4>
+                  <p className="text-xs text-ink-500 font-mono">
+                    Per-photo generation audit showing exact billed/estimated API fee.
+                  </p>
+                </div>
+                <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-ink-900/10 text-ink-800">
+                  {transformedPhotosList.length} Records
+                </span>
+              </div>
+
+              {transformedPhotosList.length === 0 ? (
+                <div className="p-8 text-center bg-canvas rounded-xl border border-dashed border-ink-900/20 space-y-2">
+                  <Bot className="w-8 h-8 text-ink-400 mx-auto" />
+                  <p className="font-serif font-bold text-sm">No AI transformations completed yet</p>
+                  <p className="text-xs text-ink-500 font-mono">
+                    Click "⚡ 1-Click AI Transform" on any photo in the queue to generate images!
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-canvas border-b-2 border-ink-900/10 text-ink-600">
+                      <tr>
+                        <th className="p-2.5">Ticket</th>
+                        <th className="p-2.5">Guest</th>
+                        <th className="p-2.5">Style / Persona</th>
+                        <th className="p-2.5">Model Used</th>
+                        <th className="p-2.5 text-right">API Fee</th>
+                        <th className="p-2.5 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-ink-900/10">
+                      {transformedPhotosList.map((photo) => {
+                        const era = getStyleById(photo.styleId);
+                        const fee = typeof photo.apiCost === 'number'
+                          ? photo.apiCost
+                          : estimateCostForModel(photo.modelUsed || openRouterModel);
+                        const modelName = photo.modelUsed || openRouterModel;
+                        return (
+                          <tr key={photo.id} className="hover:bg-canvas/60 transition-colors">
+                            <td className="p-2.5 font-bold text-ink-900">{photo.ticketNumber}</td>
+                            <td className="p-2.5 font-semibold">{photo.guestName}</td>
+                            <td className="p-2.5">
+                              <span className="px-1.5 py-0.5 rounded border text-[10px]" style={{
+                                backgroundColor: `${era.badgeColor}15`,
+                                color: era.accentColor,
+                                borderColor: `${era.badgeColor}40`,
+                              }}>
+                                {era.name}
+                              </span>
+                            </td>
+                            <td className="p-2.5">
+                              <span className="text-[10px] text-purple-900 bg-purple-100 px-1.5 py-0.5 rounded border border-purple-200">
+                                {modelName.split('/').pop()}
+                              </span>
+                            </td>
+                            <td className="p-2.5 text-right font-bold text-emerald-800">
+                              ${fee.toFixed(3)}
+                            </td>
+                            <td className="p-2.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedPhotoId(photo.id);
+                                  setActiveTab('queue');
+                                }}
+                                className="px-2 py-1 rounded text-[10px] font-bold bg-white border border-ink-900/30 hover:border-ink-900 text-ink-800"
+                              >
+                                View on Desk →
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}

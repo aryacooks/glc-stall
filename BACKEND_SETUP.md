@@ -89,10 +89,15 @@ CREATE TABLE IF NOT EXISTS public.nexora_photos (
   "transformedPhotoUrl" TEXT,
   status TEXT NOT NULL DEFAULT 'queued',
   progress INTEGER DEFAULT 0,
-  "statusMessage" TEXT,
   "createdAt" BIGINT NOT NULL,
-  "updatedAt" BIGINT NOT NULL
+  "updatedAt" BIGINT NOT NULL,
+  "apiCost" DOUBLE PRECISION DEFAULT 0,
+  "modelUsed" TEXT
 );
+
+-- Migration for existing tables:
+ALTER TABLE public.nexora_photos ADD COLUMN IF NOT EXISTS "apiCost" DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE public.nexora_photos ADD COLUMN IF NOT EXISTS "modelUsed" TEXT;
 
 -- 2. Enable Row Level Security (RLS)
 ALTER TABLE public.nexora_photos ENABLE ROW LEVEL SECURITY;

@@ -48,6 +48,8 @@ export interface GuestPhoto {
   statusMessage?: string;
   createdAt: number;
   updatedAt: number;
+  apiCost?: number;
+  modelUsed?: string;
 }
 
 export type RealtimeEvent = 
