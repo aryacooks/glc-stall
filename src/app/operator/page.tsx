@@ -129,6 +129,16 @@ export default function OperatorDashboard() {
         refreshPhotos();
         setSelectedPhotoId(event.payload.id);
 
+        // Immediately push newly taken photo to TV exhibition screen!
+        StorageService.broadcastEvent({
+          type: 'DISPLAY_FORCE_VIEW',
+          payload: {
+            photoId: event.payload.id,
+            step: 'loading',
+            photo: event.payload,
+          },
+        });
+
         // Auto-transform with OpenRouter if enabled
         if (autoTransformEnabledRef.current && openRouterApiKeyRef.current) {
           const era = getStyleById(event.payload.styleId);
@@ -291,6 +301,16 @@ export default function OperatorDashboard() {
         statusMessage: `AI generating with ${openRouterModelRef.current} (${eraStyle.name})...`,
       });
 
+      // Immediately project original photo on TV in loading mode
+      StorageService.broadcastEvent({
+        type: 'DISPLAY_FORCE_VIEW',
+        payload: {
+          photoId: photo.id,
+          step: 'loading',
+          photo: photo,
+        },
+      });
+
       showNotification(`⚡ Synthesizing image with ${openRouterModelRef.current} for ${photo.guestName}...`);
 
       const res = await fetch('/api/transform/openrouter', {
@@ -350,17 +370,13 @@ export default function OperatorDashboard() {
 
       refreshPhotos();
 
-      if (isAuto) {
-        // Automatically trigger TV breakdown transition!
-        if (updated) {
-          StorageService.broadcastEvent({
-            type: 'PHOTO_TRANSFORMED',
-            payload: updated,
-          });
-          showNotification(`✨ Auto-AI complete: ${photo.guestName} revealed on TV! ($${cost.toFixed(3)})`);
-        }
-      } else {
-        showNotification(`✨ AI transform complete: ${photo.guestName} ($${cost.toFixed(3)}). Ready for TV!`);
+      // Automatically trigger TV breakdown transition to reveal the transformed image!
+      if (updated) {
+        StorageService.broadcastEvent({
+          type: 'PHOTO_TRANSFORMED',
+          payload: updated,
+        });
+        showNotification(`✨ AI transform complete: ${photo.guestName} revealed on TV! ($${cost.toFixed(3)})`);
       }
 
       return true;
@@ -383,6 +399,19 @@ export default function OperatorDashboard() {
   const handleManualAiTransform = async () => {
     if (!selectedPhoto) return;
     await runOpenRouterTransformation(selectedPhoto, selectedEra, false);
+  };
+
+  const handleSelectPhoto = (photo: GuestPhoto) => {
+    setSelectedPhotoId(photo.id);
+    // Immediately project selected photo onto TV exhibition screen
+    StorageService.broadcastEvent({
+      type: 'DISPLAY_FORCE_VIEW',
+      payload: {
+        photoId: photo.id,
+        step: photo.transformedPhotoUrl ? 'reveal' : 'loading',
+        photo: photo,
+      },
+    });
   };
 
   const showNotification = (msg: string) => {
@@ -796,10 +825,27 @@ export default function OperatorDashboard() {
 
       showNotification(`Added ${created.ticketNumber} to queue!`);
       setSelectedPhotoId(created.id);
+
+      // Immediately project new photo onto TV exhibition screen!
+      StorageService.broadcastEvent({
+        type: 'DISPLAY_FORCE_VIEW',
+        payload: {
+          photoId: created.id,
+          step: 'loading',
+          photo: created,
+        },
+      });
+
       setShowDirectUploadModal(false);
       setDirectPhotoImg(null);
       setDirectGuestName('');
       refreshPhotos();
+
+      // Auto-transform with OpenRouter if enabled
+      if (autoTransformEnabledRef.current && openRouterApiKeyRef.current) {
+        const era = getStyleById(created.styleId);
+        runOpenRouterTransformation(created, era, true);
+      }
     } catch (err) {
       console.error('Error creating photo', err);
     } finally {
@@ -1279,7 +1325,7 @@ export default function OperatorDashboard() {
                     return (
                       <div
                         key={photo.id}
-                        onClick={() => setSelectedPhotoId(photo.id)}
+                        onClick={() => handleSelectPhoto(photo)}
                         className={`p-3 rounded-xl border-2 transition-all cursor-pointer flex items-center gap-3 ${
                           isSelected
                             ? 'bg-white border-ink-900 shadow-brutal-sm ring-2 ring-terracotta'
@@ -2492,7 +2538,7 @@ export default function OperatorDashboard() {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setSelectedPhotoId(photo.id);
+                                  handleSelectPhoto(photo);
                                   setActiveTab('queue');
                                 }}
                                 className="px-2 py-1 rounded text-[10px] font-bold bg-white border border-ink-900/30 hover:border-ink-900 text-ink-800"

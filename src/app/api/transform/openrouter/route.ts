@@ -78,7 +78,14 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           model: model,
           prompt: prompt,
-          input_references: [photoUrl],
+          input_references: [
+            {
+              type: 'image_url',
+              image_url: {
+                url: photoUrl,
+              },
+            },
+          ],
         }),
       });
 
@@ -117,18 +124,10 @@ export async function POST(req: Request) {
       console.warn('OpenRouter /api/v1/images request threw, trying /chat/completions fallback:', imagesErr);
     }
 
-    // Step B: Fallback to Chat Completions with modalities: ['image', 'text']
-    const chatRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': siteUrl,
-        'X-Title': 'NEXORA Time Machine Stall',
-      },
-      body: JSON.stringify({
+    // Step B: Fallback to Chat Completions
+    const tryChatCompletions = async (requestedModalities?: string[]) => {
+      const payload: any = {
         model: model,
-        modalities: ['image', 'text'],
         messages: [
           {
             role: 'user',
@@ -138,8 +137,45 @@ export async function POST(req: Request) {
             ],
           },
         ],
-      }),
-    });
+      };
+      if (requestedModalities && requestedModalities.length > 0) {
+        payload.modalities = requestedModalities;
+      }
+
+      return await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': siteUrl,
+          'X-Title': 'NEXORA Time Machine Stall',
+        },
+        body: JSON.stringify(payload),
+      });
+    };
+
+    // Try with modalities: ['image'] first (required for models like openai/gpt-image-2.5-flare)
+    let chatRes = await tryChatCompletions(['image']);
+
+    if (!chatRes.ok) {
+      const errClone = await chatRes.clone().json().catch(() => ({}));
+      const errMsg = errClone?.error?.message || '';
+      console.warn('Chat completion with modalities: ["image"] failed:', errMsg);
+
+      // If modalities was rejected or not supported, retry without modalities
+      if (errMsg.toLowerCase().includes('modalit') || chatRes.status === 400 || chatRes.status === 404) {
+        const retryWithoutModalities = await tryChatCompletions(undefined);
+        if (retryWithoutModalities.ok) {
+          chatRes = retryWithoutModalities;
+        } else {
+          // Also try with ['image', 'text']
+          const retryBothModalities = await tryChatCompletions(['image', 'text']);
+          if (retryBothModalities.ok) {
+            chatRes = retryBothModalities;
+          }
+        }
+      }
+    }
 
     if (!chatRes.ok) {
       const errJson = await chatRes.json().catch(() => ({}));
@@ -157,14 +193,17 @@ export async function POST(req: Request) {
       ? reportedCost
       : fallbackCost;
 
-    // Check for images in message.images array
-    if (message?.images && Array.isArray(message.images) && message.images.length > 0) {
-      const imgItem = message.images[0];
-      const imgUrl = typeof imgItem === 'string' ? imgItem : imgItem.url || imgItem.b64_json;
-      if (imgUrl) {
+    // Check for images in message.images array or choice.images
+    const imagesList = message?.images || choice?.images || (choice?.image ? [choice.image] : null);
+    if (imagesList && Array.isArray(imagesList) && imagesList.length > 0) {
+      const imgItem = imagesList[0];
+      const rawUrl = typeof imgItem === 'string'
+        ? imgItem
+        : (imgItem.image_url?.url || imgItem.url || (imgItem.b64_json ? `data:image/png;base64,${imgItem.b64_json}` : null));
+      if (rawUrl) {
         return NextResponse.json({
           success: true,
-          imageUrl: imgUrl.startsWith('data:') || imgUrl.startsWith('http') ? imgUrl : `data:image/png;base64,${imgUrl}`,
+          imageUrl: rawUrl.startsWith('data:') || rawUrl.startsWith('http') ? rawUrl : `data:image/png;base64,${rawUrl}`,
           model,
           cost: Number(finalCost),
           usage: chatData.usage,

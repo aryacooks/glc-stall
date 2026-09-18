@@ -80,17 +80,27 @@ export default function DisplayPage() {
         setActivePhoto(event.payload);
         startPixelBreakdownTransition(event.payload);
       } else if (event.type === 'DISPLAY_FORCE_VIEW') {
-        StorageService.getAllPhotos().then((list) => {
-          const found = list.find(p => p.id === event.payload.photoId);
-          if (found) {
-            setActivePhoto(found);
-            if (event.payload.step === 'reveal' && found.transformedPhotoUrl) {
-              startPixelBreakdownTransition(found);
-            } else {
-              setPhase('loaded');
-            }
+        const directPhoto = event.payload.photo;
+        if (directPhoto) {
+          setActivePhoto(directPhoto);
+          if (event.payload.step === 'reveal' && directPhoto.transformedPhotoUrl) {
+            startPixelBreakdownTransition(directPhoto);
+          } else {
+            setPhase('loaded');
           }
-        });
+        } else {
+          StorageService.getAllPhotos().then((list) => {
+            const found = list.find(p => p.id === event.payload.photoId);
+            if (found) {
+              setActivePhoto(found);
+              if (event.payload.step === 'reveal' && found.transformedPhotoUrl) {
+                startPixelBreakdownTransition(found);
+              } else {
+                setPhase('loaded');
+              }
+            }
+          });
+        }
       } else if (event.type === 'PHOTO_DELETED') {
         if (activePhoto?.id === event.payload.id) {
           if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
@@ -130,16 +140,36 @@ export default function DisplayPage() {
 
     const img = new Image();
     img.crossOrigin = 'anonymous';
+    img.onerror = () => {
+      console.warn('Image load failed for pixel breakdown transition, falling back to reveal');
+      setPhase('reveal');
+      setSliderPos(100);
+    };
     img.onload = () => {
       const width = canvas.width;
       const height = canvas.height;
 
       // Draw original image onto canvas to sample pixel colors
       ctx.clearRect(0, 0, width, height);
-      ctx.drawImage(img, 0, 0, width, height);
+      try {
+        ctx.drawImage(img, 0, 0, width, height);
+      } catch (drawErr) {
+        console.warn('Draw image error', drawErr);
+        setPhase('reveal');
+        setSliderPos(100);
+        return;
+      }
 
       // Extract image pixels
-      const imgData = ctx.getImageData(0, 0, width, height);
+      let imgData: ImageData;
+      try {
+        imgData = ctx.getImageData(0, 0, width, height);
+      } catch (corsErr) {
+        console.warn('CORS or security error extracting canvas pixels, revealing directly:', corsErr);
+        setPhase('reveal');
+        setSliderPos(100);
+        return;
+      }
       const data = imgData.data;
 
       // Create grid of pixel blocks

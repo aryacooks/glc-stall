@@ -58,5 +58,5 @@ export type RealtimeEvent =
   | { type: 'PHOTO_TRANSFORMED'; payload: GuestPhoto }
   | { type: 'PHOTO_DELETED'; payload: { id: string } }
   | { type: 'DISPLAY_RESET' }
-  | { type: 'DISPLAY_FORCE_VIEW'; payload: { photoId: string; step: 'loading' | 'reveal' } };
+  | { type: 'DISPLAY_FORCE_VIEW'; payload: { photoId: string; step: 'loading' | 'reveal'; photo?: GuestPhoto } };
 
