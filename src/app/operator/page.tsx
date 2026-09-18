@@ -8,7 +8,7 @@ import {
   Palette, Camera, X, Clipboard, Plus, Trash2
 } from 'lucide-react';
 import { getAllThemes, getStyleById, saveCustomTheme, deleteCustomTheme } from '@/lib/stylesConfig';
-import { GuestPhoto, PhotoStatus, EraStyleId, StyleEra } from '@/lib/types';
+import { GuestPhoto, PhotoStatus, EraStyleId, StyleEra, StyleCategory } from '@/lib/types';
 import { StorageService } from '@/lib/storageService';
 import Link from 'next/link';
 
@@ -22,6 +22,12 @@ export default function OperatorDashboard() {
   const [dragOver, setDragOver] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
   const [themes, setThemes] = useState<StyleEra[]>([]);
+
+  // Category filters
+  const [deskCategoryFilter, setDeskCategoryFilter] = useState<'all' | 'theme' | 'character'>('theme');
+  const [promptFilterCategory, setPromptFilterCategory] = useState<'all' | 'theme' | 'character'>('all');
+  const [newThemeCategory, setNewThemeCategory] = useState<StyleCategory>('theme');
+  const [directCategoryFilter, setDirectCategoryFilter] = useState<StyleCategory>('theme');
 
   // Add New Theme Form State
   const [newThemeName, setNewThemeName] = useState('');
@@ -331,21 +337,23 @@ export default function OperatorDashboard() {
   const handleSaveNewTheme = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newThemeName.trim() || !newThemePrompt.trim()) {
-      alert('Please provide a Theme Title and ChatGPT Prompt.');
+      alert('Please provide a Title and ChatGPT Prompt.');
       return;
     }
 
     saveCustomTheme({
       name: newThemeName,
-      tagline: newThemeTagline || 'Custom prompt style',
+      category: newThemeCategory,
+      tagline: newThemeTagline || (newThemeCategory === 'character' ? 'Custom character persona' : 'Custom era aesthetic'),
       promptTemplate: newThemePrompt,
     });
 
     setNewThemeName('');
     setNewThemeTagline('');
     setNewThemePrompt('');
+    setNewThemeCategory('theme');
     setShowAddThemeModal(false);
-    showNotification('Theme added! It is now selectable on mobile.');
+    showNotification(`${newThemeCategory === 'character' ? 'Character' : 'Theme'} added! Selectable on mobile.`);
   };
 
   // Direct Desk Photo Submission
@@ -408,12 +416,44 @@ export default function OperatorDashboard() {
             <form onSubmit={handleSaveNewTheme} className="space-y-3">
               <div>
                 <label className="block text-xs font-mono font-bold uppercase text-ink-600 mb-1">
-                  Theme Title (e.g. "Cyberpunk 2077", "Anime Ninja", "1980s Disco")
+                  Type / Category
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewThemeCategory('theme')}
+                    className={`py-2 px-3 rounded-lg border text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition-all ${
+                      newThemeCategory === 'theme'
+                        ? 'bg-terracotta text-white border-ink-900 shadow-sm'
+                        : 'bg-canvas text-ink-700 border-ink-900/20 hover:border-ink-900/50'
+                    }`}
+                  >
+                    <span>🎨</span>
+                    <span>Era Theme</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewThemeCategory('character')}
+                    className={`py-2 px-3 rounded-lg border text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition-all ${
+                      newThemeCategory === 'character'
+                        ? 'bg-purple-600 text-white border-ink-900 shadow-sm'
+                        : 'bg-canvas text-ink-700 border-ink-900/20 hover:border-ink-900/50'
+                    }`}
+                  >
+                    <span>🎭</span>
+                    <span>Character Persona</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono font-bold uppercase text-ink-600 mb-1">
+                  {newThemeCategory === 'character' ? 'Character Name (e.g. "Steampunk Aviator", "Space Bounty Hunter")' : 'Theme Title (e.g. "Cyberpunk 2077", "Studio Ghibli", "1980s Disco")'}
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Vintage Polaroid"
+                  placeholder={newThemeCategory === 'character' ? 'e.g. Steampunk Aviator' : 'e.g. Vintage Polaroid'}
                   value={newThemeName}
                   onChange={(e) => setNewThemeName(e.target.value)}
                   className="w-full text-sm font-semibold bg-canvas border border-ink-900/30 rounded-lg p-2.5 focus:outline-none focus:border-terracotta"
@@ -532,28 +572,65 @@ export default function OperatorDashboard() {
             </div>
 
             <div>
-              <label className="block text-xs font-mono font-bold uppercase text-ink-600 mb-1.5 flex items-center gap-1.5">
-                <Palette className="w-3.5 h-3.5 text-terracotta" />
-                Select Transformation Theme:
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {themes.map((era) => {
-                  const isSel = directSelectedStyle === era.id;
-                  return (
-                    <button
-                      key={era.id}
-                      type="button"
-                      onClick={() => setDirectSelectedStyle(era.id)}
-                      className={`p-2 rounded-lg border text-left text-xs font-mono transition-all ${
-                        isSel
-                          ? 'border-ink-900 bg-terracotta text-white font-bold shadow-brutal-sm'
-                          : 'border-ink-900/20 bg-canvas hover:border-ink-900/50 text-ink-800'
-                      }`}
-                    >
-                      {era.name}
-                    </button>
-                  );
-                })}
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-mono font-bold uppercase text-ink-600 flex items-center gap-1.5">
+                  <Palette className="w-3.5 h-3.5 text-terracotta" />
+                  Select Style:
+                </label>
+                <div className="flex items-center gap-1 bg-canvas p-0.5 rounded border border-ink-900/20">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDirectCategoryFilter('theme');
+                      const firstTheme = themes.find(t => t.category !== 'character');
+                      if (firstTheme && getStyleById(directSelectedStyle)?.category === 'character') {
+                        setDirectSelectedStyle(firstTheme.id);
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                      directCategoryFilter === 'theme' ? 'bg-terracotta text-white' : 'text-ink-600'
+                    }`}
+                  >
+                    Themes ({themes.filter(t => t.category !== 'character').length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDirectCategoryFilter('character');
+                      const firstChar = themes.find(t => t.category === 'character');
+                      if (firstChar && getStyleById(directSelectedStyle)?.category !== 'character') {
+                        setDirectSelectedStyle(firstChar.id);
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                      directCategoryFilter === 'character' ? 'bg-purple-600 text-white' : 'text-ink-600'
+                    }`}
+                  >
+                    Characters ({themes.filter(t => t.category === 'character').length})
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1">
+                {themes
+                  .filter(era => directCategoryFilter === 'character' ? era.category === 'character' : era.category !== 'character')
+                  .map((era) => {
+                    const isSel = directSelectedStyle === era.id;
+                    return (
+                      <button
+                        key={era.id}
+                        type="button"
+                        onClick={() => setDirectSelectedStyle(era.id)}
+                        className={`p-2 rounded-lg border text-left text-xs font-mono transition-all truncate ${
+                          isSel
+                            ? 'border-ink-900 bg-terracotta text-white font-bold shadow-brutal-sm'
+                            : 'border-ink-900/20 bg-canvas hover:border-ink-900/50 text-ink-800'
+                        }`}
+                      >
+                        {era.name}
+                      </button>
+                    );
+                  })}
               </div>
             </div>
 
@@ -830,7 +907,10 @@ export default function OperatorDashboard() {
                           {selectedPhoto.guestName}
                         </h4>
                         <span className="text-[11px] font-mono text-ink-500">
-                          Selected Theme: <strong className="text-terracotta">{selectedEra.name}</strong>
+                          Selected {selectedEra.category === 'character' ? 'Character' : 'Theme'}:{' '}
+                          <strong className={selectedEra.category === 'character' ? 'text-purple-700' : 'text-terracotta'}>
+                            {selectedEra.name}
+                          </strong>
                         </span>
                       </div>
                     </div>
@@ -857,33 +937,90 @@ export default function OperatorDashboard() {
                     </div>
                   </div>
 
-                  {/* THEME SELECTOR PILLS */}
-                  <div className="bg-canvas p-3 rounded-xl border border-ink-900/20">
-                    <span className="text-[10px] font-mono uppercase font-bold text-ink-600 block mb-1.5 flex items-center gap-1">
-                      <Palette className="w-3 h-3 text-terracotta" />
-                      Switch Theme Title (Updates ChatGPT prompt instantly):
-                    </span>
+                  {/* THEME & CHARACTER SELECTOR PILLS */}
+                  <div className="bg-canvas p-3 rounded-xl border border-ink-900/20 space-y-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <span className="text-[10px] font-mono uppercase font-bold text-ink-600 flex items-center gap-1">
+                        <Palette className="w-3 h-3 text-terracotta" />
+                        Switch Style (Updates ChatGPT Prompt Instantly):
+                      </span>
+
+                      <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-ink-900/20 self-start sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => setDeskCategoryFilter('theme')}
+                          className={`px-2 py-0.5 rounded text-xs font-mono font-bold transition-all flex items-center gap-1 ${
+                            deskCategoryFilter === 'theme'
+                              ? 'bg-terracotta text-white shadow-xs'
+                              : 'text-ink-600 hover:text-ink-900'
+                          }`}
+                        >
+                          <span>🎨 Themes</span>
+                          <span className="text-[10px] opacity-80">
+                            ({themes.filter(t => t.category !== 'character').length})
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setDeskCategoryFilter('character')}
+                          className={`px-2 py-0.5 rounded text-xs font-mono font-bold transition-all flex items-center gap-1 ${
+                            deskCategoryFilter === 'character'
+                              ? 'bg-purple-600 text-white shadow-xs'
+                              : 'text-ink-600 hover:text-ink-900'
+                          }`}
+                        >
+                          <span>🎭 Characters</span>
+                          <span className="text-[10px] opacity-80">
+                            ({themes.filter(t => t.category === 'character').length})
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setDeskCategoryFilter('all')}
+                          className={`px-2 py-0.5 rounded text-xs font-mono font-bold transition-all ${
+                            deskCategoryFilter === 'all'
+                              ? 'bg-ink-900 text-white shadow-xs'
+                              : 'text-ink-600 hover:text-ink-900'
+                          }`}
+                        >
+                          All ({themes.length})
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="flex flex-wrap gap-1.5">
-                      {themes.map((era) => {
-                        const isActive = selectedPhoto.styleId === era.id;
-                        return (
-                          <button
-                            key={era.id}
-                            onClick={() => handleChangeEra(era.id)}
-                            className={`text-xs font-mono px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${
-                              isActive
-                                ? 'bg-terracotta text-white border-ink-900 font-bold shadow-brutal-sm ring-1 ring-ink-900'
-                                : 'bg-white border-ink-900/30 text-ink-800 hover:border-terracotta'
-                            }`}
-                          >
-                            <span
-                              className="w-2 h-2 rounded-full"
-                              style={{ backgroundColor: isActive ? '#FFFFFF' : era.badgeColor }}
-                            />
-                            {era.name}
-                          </button>
-                        );
-                      })}
+                      {themes
+                        .filter((era) => {
+                          if (deskCategoryFilter === 'theme') return era.category !== 'character';
+                          if (deskCategoryFilter === 'character') return era.category === 'character';
+                          return true;
+                        })
+                        .map((era) => {
+                          const isActive = selectedPhoto.styleId === era.id;
+                          const isChar = era.category === 'character';
+                          return (
+                            <button
+                              key={era.id}
+                              onClick={() => handleChangeEra(era.id)}
+                              className={`text-xs font-mono px-3 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 ${
+                                isActive
+                                  ? isChar
+                                    ? 'bg-purple-700 text-white border-ink-900 font-bold shadow-brutal-sm ring-1 ring-ink-900'
+                                    : 'bg-terracotta text-white border-ink-900 font-bold shadow-brutal-sm ring-1 ring-ink-900'
+                                  : 'bg-white border-ink-900/30 text-ink-800 hover:border-terracotta'
+                              }`}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full"
+                                style={{ backgroundColor: isActive ? '#FFFFFF' : era.badgeColor }}
+                              />
+                              <span>{era.name}</span>
+                              {isChar && <span className="text-[10px] opacity-75">🎭</span>}
+                            </button>
+                          );
+                        })}
                     </div>
                   </div>
 
@@ -1078,76 +1215,136 @@ export default function OperatorDashboard() {
         {/* THEMES & PROMPTS MANAGER TAB */}
         {activeTab === 'prompts' && (
           <div className="space-y-5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h3 className="font-serif text-2xl font-bold">Themes & Custom Prompts Manager</h3>
                 <p className="text-xs text-ink-500 font-mono">
-                  All active themes appear dynamically on the mobile upload screen for visitors to choose.
+                  All active themes and characters appear dynamically on mobile upload for visitors to choose.
                 </p>
               </div>
 
               <button
                 onClick={() => setShowAddThemeModal(true)}
-                className="localflow-btn-primary px-4 py-2 text-xs flex items-center gap-1.5 font-mono shadow-brutal-sm"
+                className="localflow-btn-primary px-4 py-2 text-xs flex items-center gap-1.5 font-mono shadow-brutal-sm self-start sm:self-auto"
               >
                 <Plus className="w-4 h-4" />
-                Add New Theme & Prompt
+                Add New Style / Persona
+              </button>
+            </div>
+
+            {/* Category Filter Tabs */}
+            <div className="flex items-center gap-1 p-1 bg-canvas border border-ink-900/20 rounded-xl w-fit">
+              <button
+                type="button"
+                onClick={() => setPromptFilterCategory('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+                  promptFilterCategory === 'all'
+                    ? 'bg-ink-900 text-white shadow-xs'
+                    : 'text-ink-600 hover:text-ink-900'
+                }`}
+              >
+                All ({themes.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPromptFilterCategory('theme')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
+                  promptFilterCategory === 'theme'
+                    ? 'bg-terracotta text-white shadow-xs'
+                    : 'text-ink-600 hover:text-ink-900'
+                }`}
+              >
+                <span>🎨 Era Themes</span>
+                <span>({themes.filter(t => t.category !== 'character').length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPromptFilterCategory('character')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
+                  promptFilterCategory === 'character'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'text-ink-600 hover:text-ink-900'
+                }`}
+              >
+                <span>🎭 Characters</span>
+                <span>({themes.filter(t => t.category === 'character').length})</span>
               </button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {themes.map((era) => (
-                <div key={era.id} className="localflow-card p-4 space-y-3 flex flex-col justify-between bg-white">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span
-                        className="text-xs font-mono font-bold uppercase px-2 py-0.5 rounded border"
-                        style={{
-                          backgroundColor: `${era.badgeColor}20`,
-                          color: era.accentColor,
-                          borderColor: `${era.badgeColor}60`,
-                        }}
+              {themes
+                .filter((era) => {
+                  if (promptFilterCategory === 'theme') return era.category !== 'character';
+                  if (promptFilterCategory === 'character') return era.category === 'character';
+                  return true;
+                })
+                .map((era) => {
+                  const isChar = era.category === 'character';
+                  return (
+                    <div key={era.id} className="localflow-card p-4 space-y-3 flex flex-col justify-between bg-white">
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="text-xs font-mono font-bold uppercase px-2 py-0.5 rounded border"
+                              style={{
+                                backgroundColor: `${era.badgeColor}20`,
+                                color: era.accentColor,
+                                borderColor: `${era.badgeColor}60`,
+                              }}
+                            >
+                              {era.name}
+                            </span>
+                            <span
+                              className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                                isChar
+                                  ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                              }`}
+                            >
+                              {isChar ? '🎭 Persona' : '🎨 Theme'}
+                            </span>
+                          </div>
+
+                          {era.id.startsWith('custom_') && (
+                            <button
+                              onClick={() => deleteCustomTheme(era.id)}
+                              className="text-ink-400 hover:text-rose-600 p-1"
+                              title="Delete this custom style"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        <p className="text-xs text-ink-700 font-medium mb-3">
+                          {era.tagline}
+                        </p>
+
+                        <div className="bg-canvas p-3 rounded-lg border border-ink-900/20 text-xs font-mono text-ink-800 max-h-36 overflow-y-auto leading-relaxed select-all">
+                          {era.promptTemplate}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleCopyPrompt(era.promptTemplate, era.id)}
+                        className="localflow-btn-secondary w-full py-2 text-xs flex items-center justify-center gap-2 font-mono"
                       >
-                        {era.name}
-                      </span>
-                      {era.id.startsWith('custom_') && (
-                        <button
-                          onClick={() => deleteCustomTheme(era.id)}
-                          className="text-ink-400 hover:text-rose-600 p-1"
-                          title="Delete this custom theme"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                        {copiedPromptId === era.id ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            Copied Prompt!
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            Copy Prompt Template
+                          </>
+                        )}
+                      </button>
                     </div>
-
-                    <p className="text-xs text-ink-700 font-medium mb-3">
-                      {era.tagline}
-                    </p>
-
-                    <div className="bg-canvas p-3 rounded-lg border border-ink-900/20 text-xs font-mono text-ink-800 max-h-36 overflow-y-auto leading-relaxed select-all">
-                      {era.promptTemplate}
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => handleCopyPrompt(era.promptTemplate, era.id)}
-                    className="localflow-btn-secondary w-full py-2 text-xs flex items-center justify-center gap-2 font-mono"
-                  >
-                    {copiedPromptId === era.id ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        Copied Prompt!
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        Copy Prompt Template
-                      </>
-                    )}
-                  </button>
-                </div>
-              ))}
+                  );
+                })}
             </div>
           </div>
         )}

@@ -430,7 +430,13 @@ export default function DisplayPage() {
                 {activePhoto.ticketNumber} • {activePhoto.guestName}
               </div>
               <h2 className="font-serif text-3xl md:text-4xl font-black text-[#1E1E1E] tracking-tight">
-                {phase === 'reveal' ? `${activePhoto.guestName} in the ${currentEra.name}` : `Target Era: ${currentEra.name}`}
+                {phase === 'reveal'
+                  ? currentEra.category === 'character'
+                    ? `${activePhoto.guestName} as ${currentEra.name}`
+                    : `${activePhoto.guestName} in the ${currentEra.name}`
+                  : currentEra.category === 'character'
+                    ? `Target Persona: ${currentEra.name}`
+                    : `Target Era: ${currentEra.name}`}
               </h2>
               <p className="text-xs font-mono text-[#6B6B6B]">
                 {currentEra.eraLabel} • {currentEra.tagline}

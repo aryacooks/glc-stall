@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Camera, SwitchCamera, Upload, Sparkles, Check, ArrowRight, RefreshCw, Zap, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
 import { getAllThemes, getStyleById } from '@/lib/stylesConfig';
-import { StyleEra, GuestPhoto } from '@/lib/types';
+import { StyleEra, GuestPhoto, StyleCategory } from '@/lib/types';
 import { StorageService } from '@/lib/storageService';
 import Link from 'next/link';
 
@@ -12,6 +12,7 @@ export default function CapturePage() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [themes, setThemes] = useState<StyleEra[]>([]);
+  const [activeCategory, setActiveCategory] = useState<StyleCategory>('theme');
   const [selectedStyleId, setSelectedStyleId] = useState<string>('1980s');
   const [guestName, setGuestName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -372,51 +373,118 @@ export default function CapturePage() {
               </div>
             </div>
 
-            {/* Dynamic Themes Grid */}
+            {/* Category Toggle Tabs (Themes vs Characters) */}
             <div className="space-y-2">
-              <label className="text-xs font-mono font-bold uppercase tracking-wider text-ink-700 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-terracotta" />
-                Choose Transformation Style:
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-mono font-bold uppercase tracking-wider text-ink-700 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-terracotta" />
+                  Choose Transformation Style:
+                </label>
+                <span className="text-[10px] font-mono text-ink-500 font-semibold">
+                  {activeCategory === 'character' ? '10 Characters' : '6 Era Themes'}
+                </span>
+              </div>
 
-              <div className="grid grid-cols-2 gap-2.5 max-h-[38vh] overflow-y-auto pr-1 pb-1">
-                {themes.map((era) => {
-                  const isSelected = selectedStyleId === era.id;
-                  return (
-                    <button
-                      key={era.id}
-                      type="button"
-                      onClick={() => setSelectedStyleId(era.id)}
-                      className={`relative text-left rounded-xl p-3 border-2 transition-all flex flex-col justify-between ${
-                        isSelected
-                          ? 'border-ink-900 bg-white shadow-brutal-sm ring-2 ring-terracotta'
-                          : 'border-ink-900/20 bg-canvas-card hover:border-ink-900/40'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span
-                          className="text-[11px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border"
-                          style={{
-                            backgroundColor: `${era.badgeColor}15`,
-                            color: era.accentColor,
-                            borderColor: `${era.badgeColor}50`,
-                          }}
-                        >
-                          {era.name}
-                        </span>
-                        {isSelected && (
-                          <div className="w-4 h-4 rounded-full bg-terracotta text-white flex items-center justify-center">
-                            <Check className="w-2.5 h-2.5 stroke-[3]" />
+              <div className="grid grid-cols-2 p-1 bg-canvas border-2 border-ink-900 rounded-xl shadow-brutal-sm gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveCategory('theme');
+                    const firstTheme = themes.find(t => t.category !== 'character');
+                    if (firstTheme && selectedEraObj?.category === 'character') {
+                      setSelectedStyleId(firstTheme.id);
+                    }
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-mono font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    activeCategory === 'theme'
+                      ? 'bg-terracotta text-white border border-ink-900 shadow-sm'
+                      : 'text-ink-600 hover:text-ink-900 hover:bg-white/60'
+                  }`}
+                >
+                  <span>🎨</span>
+                  <span>Era Themes</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                    activeCategory === 'theme' ? 'bg-white/25 text-white' : 'bg-ink-900/10 text-ink-600'
+                  }`}>
+                    {themes.filter(t => t.category !== 'character').length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveCategory('character');
+                    const firstChar = themes.find(t => t.category === 'character');
+                    if (firstChar && selectedEraObj?.category !== 'character') {
+                      setSelectedStyleId(firstChar.id);
+                    }
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-mono font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    activeCategory === 'character'
+                      ? 'bg-purple-600 text-white border border-ink-900 shadow-sm'
+                      : 'text-ink-600 hover:text-ink-900 hover:bg-white/60'
+                  }`}
+                >
+                  <span>🎭</span>
+                  <span>Characters</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                    activeCategory === 'character' ? 'bg-white/25 text-white' : 'bg-ink-900/10 text-ink-600'
+                  }`}>
+                    {themes.filter(t => t.category === 'character').length}
+                  </span>
+                </button>
+              </div>
+
+              {/* Filtered Styles Grid */}
+              <div className="grid grid-cols-2 gap-2.5 max-h-[36vh] overflow-y-auto pr-1 pb-1">
+                {themes
+                  .filter(era => activeCategory === 'character' ? era.category === 'character' : era.category !== 'character')
+                  .map((era) => {
+                    const isSelected = selectedStyleId === era.id;
+                    return (
+                      <button
+                        key={era.id}
+                        type="button"
+                        onClick={() => setSelectedStyleId(era.id)}
+                        className={`relative text-left rounded-xl p-3 border-2 transition-all flex flex-col justify-between ${
+                          isSelected
+                            ? 'border-ink-900 bg-white shadow-brutal-sm ring-2 ring-terracotta'
+                            : 'border-ink-900/20 bg-canvas-card hover:border-ink-900/40'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span
+                              className="text-[11px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border leading-tight truncate max-w-[120px]"
+                              style={{
+                                backgroundColor: `${era.badgeColor}15`,
+                                color: era.accentColor,
+                                borderColor: `${era.badgeColor}50`,
+                              }}
+                            >
+                              {era.name}
+                            </span>
+                            {isSelected && (
+                              <div className="w-4 h-4 rounded-full bg-terracotta text-white flex items-center justify-center flex-shrink-0">
+                                <Check className="w-2.5 h-2.5 stroke-[3]" />
+                              </div>
+                            )}
+                          </div>
+
+                          <p className="text-[11px] text-ink-700 line-clamp-2 leading-tight mt-1">
+                            {era.tagline}
+                          </p>
+                        </div>
+
+                        {era.category === 'character' && (
+                          <div className="mt-2 pt-1 border-t border-ink-900/10 flex items-center justify-between text-[9px] font-mono text-purple-700">
+                            <span>🎭 PERSONA</span>
+                            <span className="truncate max-w-[80px]">{era.eraLabel}</span>
                           </div>
                         )}
-                      </div>
-
-                      <p className="text-[11px] text-ink-700 line-clamp-2 leading-tight mt-1">
-                        {era.tagline}
-                      </p>
-                    </button>
-                  );
-                })}
+                      </button>
+                    );
+                  })}
               </div>
             </div>
           </div>
@@ -434,7 +502,11 @@ export default function CapturePage() {
                 </>
               ) : (
                 <>
-                  <span>Upload & Step into {selectedEraObj.name}</span>
+                  <span>
+                    {selectedEraObj?.category === 'character'
+                      ? `Upload & Transform into ${selectedEraObj.name}`
+                      : `Upload & Step into ${selectedEraObj?.name || 'Selected Era'}`}
+                  </span>
                   <ArrowRight className="w-5 h-5" />
                 </>
               )}
