@@ -5,7 +5,8 @@ import {
   Users, Sparkles, Copy, Check, ArrowRight, Play, RefreshCw, 
   Tv, MonitorPlay, Image as ImageIcon, Upload, FileText, CheckCircle2,
   Clock, Flame, Layers, ExternalLink, Sliders, AlertCircle, Settings,
-  Palette, Camera, X, Clipboard, Plus, Trash2, Download
+  Palette, Camera, X, Clipboard, Plus, Trash2, Download,
+  Bot, Key, Power, CheckCircle, Eye, EyeOff, Zap
 } from 'lucide-react';
 import { getAllThemes, getStyleById, saveCustomTheme, deleteCustomTheme } from '@/lib/stylesConfig';
 import { GuestPhoto, PhotoStatus, EraStyleId, StyleEra, StyleCategory } from '@/lib/types';
@@ -29,6 +30,21 @@ export default function OperatorDashboard() {
   const [promptFilterCategory, setPromptFilterCategory] = useState<'all' | 'theme' | 'character'>('all');
   const [newThemeCategory, setNewThemeCategory] = useState<StyleCategory>('theme');
   const [directCategoryFilter, setDirectCategoryFilter] = useState<StyleCategory>('theme');
+
+  // OpenRouter Engine Configuration
+  const [openRouterApiKey, setOpenRouterApiKey] = useState('');
+  const [openRouterModel, setOpenRouterModel] = useState('openai/gpt-image-2.5-flare');
+  const [autoTransformEnabled, setAutoTransformEnabled] = useState(false);
+  const [isAiTransforming, setIsAiTransforming] = useState(false);
+  const [isTestingKey, setIsTestingKey] = useState(false);
+  const [keyTestResult, setKeyTestResult] = useState<{ valid: boolean; message: string } | null>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
+
+  // Synchronous refs for event listeners and background triggers
+  const openRouterApiKeyRef = useRef('');
+  const openRouterModelRef = useRef('openai/gpt-image-2.5-flare');
+  const autoTransformEnabledRef = useRef(false);
+  const processedAutoPhotoIdsRef = useRef<Set<string>>(new Set());
 
   // Add New Theme Form State
   const [newThemeName, setNewThemeName] = useState('');
@@ -63,6 +79,15 @@ export default function OperatorDashboard() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       document.title = '⚡ Operator Deck (Do Not Spill Coffee) · NEXORA';
+      const savedKey = localStorage.getItem('nexora_openrouter_api_key') || '';
+      const savedModel = localStorage.getItem('nexora_openrouter_model') || 'openai/gpt-image-2.5-flare';
+      const savedAuto = localStorage.getItem('nexora_openrouter_auto_transform') === 'true';
+      setOpenRouterApiKey(savedKey);
+      openRouterApiKeyRef.current = savedKey;
+      setOpenRouterModel(savedModel);
+      openRouterModelRef.current = savedModel;
+      setAutoTransformEnabled(savedAuto);
+      autoTransformEnabledRef.current = savedAuto;
     }
     loadThemesList();
     refreshPhotos();
@@ -75,6 +100,12 @@ export default function OperatorDashboard() {
         showNotification(`New guest arrived: ${event.payload.guestName} (${event.payload.ticketNumber})`);
         refreshPhotos();
         setSelectedPhotoId(event.payload.id);
+
+        // Auto-transform with OpenRouter if enabled
+        if (autoTransformEnabledRef.current && openRouterApiKeyRef.current) {
+          const era = getStyleById(event.payload.styleId);
+          runOpenRouterTransformation(event.payload, era, true);
+        }
       } else if (event.type === 'PHOTO_DELETED') {
         setPhotos((prev) => {
           const nextList = prev.filter((p) => p.id !== event.payload.id);
@@ -95,6 +126,171 @@ export default function OperatorDashboard() {
       clearInterval(pollInterval);
     };
   }, []);
+
+  // OpenRouter Settings Helpers
+  const handleUpdateApiKey = (key: string) => {
+    setOpenRouterApiKey(key);
+    openRouterApiKeyRef.current = key;
+    setKeyTestResult(null);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nexora_openrouter_api_key', key);
+    }
+  };
+
+  const handleUpdateModel = (model: string) => {
+    setOpenRouterModel(model);
+    openRouterModelRef.current = model;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nexora_openrouter_model', model);
+    }
+  };
+
+  const handleToggleAutoTransform = (enabled: boolean) => {
+    setAutoTransformEnabled(enabled);
+    autoTransformEnabledRef.current = enabled;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nexora_openrouter_auto_transform', enabled ? 'true' : 'false');
+    }
+    showNotification(enabled ? '⚡ Auto-AI Transformation turned ON!' : 'Auto-AI Transformation turned OFF');
+  };
+
+  const handleTestApiKey = async () => {
+    const key = openRouterApiKey.trim() || openRouterApiKeyRef.current.trim();
+    if (!key) {
+      alert('Please enter your OpenRouter API key first.');
+      return;
+    }
+    setIsTestingKey(true);
+    setKeyTestResult(null);
+    try {
+      const res = await fetch('/api/transform/openrouter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: key,
+          action: 'test',
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const label = data.keyInfo?.label || 'OpenRouter';
+        setKeyTestResult({
+          valid: true,
+          message: `Connected! (${label}${data.keyInfo?.limit ? ` · Limit: $${data.keyInfo.limit}` : ''})`,
+        });
+        showNotification('OpenRouter API Key verified successfully!');
+      } else {
+        setKeyTestResult({
+          valid: false,
+          message: data.error || 'Invalid API Key',
+        });
+      }
+    } catch (e: any) {
+      setKeyTestResult({
+        valid: false,
+        message: e.message || 'Connection check failed',
+      });
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
+
+  // OpenRouter Generation Function
+  const runOpenRouterTransformation = async (photo: GuestPhoto, eraStyle: StyleEra, isAuto = false): Promise<boolean> => {
+    const key = openRouterApiKey.trim() || openRouterApiKeyRef.current.trim();
+    if (!key) {
+      if (!isAuto) {
+        alert('Please enter your OpenRouter API Key in the Settings tab first.');
+        setActiveTab('settings');
+      }
+      return false;
+    }
+
+    if (processedAutoPhotoIdsRef.current.has(photo.id) && isAuto) {
+      return false; // Prevent duplicate auto runs
+    }
+    if (isAuto) {
+      processedAutoPhotoIdsRef.current.add(photo.id);
+    }
+
+    try {
+      if (!isAuto) setIsAiTransforming(true);
+
+      // Update Supabase status so TV display knows it is transforming
+      await StorageService.updatePhoto(photo.id, {
+        status: 'processing',
+        progress: 40,
+        statusMessage: `AI generating with ${openRouterModelRef.current} (${eraStyle.name})...`,
+      });
+
+      showNotification(`⚡ Synthesizing image with ${openRouterModelRef.current} for ${photo.guestName}...`);
+
+      const res = await fetch('/api/transform/openrouter', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-openrouter-key': key,
+        },
+        body: JSON.stringify({
+          apiKey: key,
+          model: openRouterModelRef.current,
+          photoUrl: photo.rawPhotoUrl,
+          prompt: eraStyle.promptTemplate,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success || !data.imageUrl) {
+        throw new Error(data.error || 'Failed to generate image from OpenRouter');
+      }
+
+      // Apply watermark
+      const watermarked = await StorageService.applyWatermark(data.imageUrl, eraStyle.name);
+
+      // Save to Supabase and local storage
+      const updated = await StorageService.updatePhoto(photo.id, {
+        transformedPhotoUrl: watermarked,
+        status: 'ready',
+        statusMessage: `AI Transformed by ${openRouterModelRef.current} (${eraStyle.name})`,
+      });
+
+      refreshPhotos();
+
+      if (isAuto) {
+        // Automatically trigger TV breakdown transition!
+        if (updated) {
+          StorageService.broadcastEvent({
+            type: 'PHOTO_TRANSFORMED',
+            payload: updated,
+          });
+          showNotification(`✨ Auto-AI complete: ${photo.guestName} revealed on TV!`);
+        }
+      } else {
+        showNotification(`✨ Flare AI transformation complete! Click "Show Transition on TV" below.`);
+      }
+
+      return true;
+    } catch (err: any) {
+      console.error('Error in OpenRouter transformation:', err);
+      showNotification(`⚠️ OpenRouter error: ${err.message || 'Generation failed'}`);
+      await StorageService.updatePhoto(photo.id, {
+        status: 'queued',
+        progress: 0,
+        statusMessage: `AI Generation failed: ${err.message || 'Please try again'}`,
+      });
+      refreshPhotos();
+      return false;
+    } finally {
+      if (!isAuto) setIsAiTransforming(false);
+    }
+  };
+
+  // Manual 1-Click Transform Handler for active photo
+  const handleManualAiTransform = async () => {
+    if (!selectedPhoto) return;
+    await runOpenRouterTransformation(selectedPhoto, selectedEra, false);
+  };
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -1019,6 +1215,21 @@ export default function OperatorDashboard() {
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {/* Auto-AI Quick Switch Pill */}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAutoTransform(!autoTransformEnabled)}
+                        className={`text-xs font-mono px-2.5 py-1.5 rounded-lg border flex items-center gap-1.5 transition-all ${
+                          autoTransformEnabled
+                            ? 'bg-emerald-600 text-white border-ink-900 font-bold shadow-sm'
+                            : 'bg-white border-ink-900/30 text-ink-600 hover:border-ink-900'
+                        }`}
+                        title="Toggle Auto-AI generation for incoming photos"
+                      >
+                        <Zap className={`w-3.5 h-3.5 ${autoTransformEnabled ? 'fill-current animate-pulse' : ''}`} />
+                        <span>Auto-AI: {autoTransformEnabled ? 'ON' : 'OFF'}</span>
+                      </button>
+
                       <button
                         onClick={(e) => handleDeletePhoto(selectedPhoto.id, e)}
                         className="localflow-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1.5 font-mono text-rose-700 border-rose-300 hover:bg-rose-50 hover:border-rose-500 transition-colors"
@@ -1124,6 +1335,53 @@ export default function OperatorDashboard() {
                             </button>
                           );
                         })}
+                    </div>
+                  </div>
+
+                  {/* ⚡ OPENROUTER AI 1-CLICK ACTION BAR */}
+                  <div className="p-3.5 rounded-xl border-2 border-purple-900/30 bg-purple-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-brutal-sm">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-purple-600 text-white flex items-center justify-center shadow-sm flex-shrink-0">
+                        <Bot className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-serif font-bold text-sm text-purple-950">
+                            OpenRouter AI Pipeline
+                          </span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-200/80 text-purple-900 font-bold border border-purple-300">
+                            {openRouterModel.split('/').pop()}
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-mono text-purple-800 mt-0.5">
+                          Direct AI generation with photo & prompt. No manual copy-paste needed!
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleManualAiTransform}
+                        disabled={isAiTransforming || !selectedPhoto}
+                        className={`px-4 py-2 rounded-lg text-xs font-mono font-bold border-2 border-ink-900 flex items-center gap-2 shadow-brutal-sm transition-all ${
+                          isAiTransforming
+                            ? 'bg-purple-300 text-purple-900 cursor-wait'
+                            : 'bg-purple-600 text-white hover:bg-purple-700 active:translate-x-0.5 active:translate-y-0.5 cursor-pointer'
+                        }`}
+                      >
+                        {isAiTransforming ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Synthesizing Image...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                            <span>⚡ 1-Click AI Transform</span>
+                          </>
+                        )}
+                      </button>
                     </div>
                   </div>
 
@@ -1471,14 +1729,181 @@ export default function OperatorDashboard() {
 
         {/* SETTINGS TAB */}
         {activeTab === 'settings' && (
-          <div className="space-y-5 max-w-3xl">
+          <div className="space-y-6 max-w-3xl">
             <div>
-              <h3 className="font-serif text-xl font-bold">Stall Preferences & Backend</h3>
+              <h3 className="font-serif text-2xl font-bold">Stall Preferences & API Automation</h3>
               <p className="text-xs text-ink-500 font-mono">
-                Supabase database is connected on project <code className="localflow-key text-[10px]">hjwgcfqwjsalpimggtbk</code>.
+                Supabase database connected on project <code className="localflow-key text-[10px]">hjwgcfqwjsalpimggtbk</code>.
               </p>
             </div>
 
+            {/* OPENROUTER AI ENGINE CARD */}
+            <div className="localflow-card p-6 space-y-5 bg-white border-2 border-ink-900 shadow-brutal">
+              <div className="flex items-center justify-between border-b border-ink-900/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-purple-100 border-2 border-ink-900 flex items-center justify-center text-purple-700 shadow-sm">
+                    <Bot className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-serif text-lg font-bold text-ink-900">
+                      OpenRouter AI Transformation Engine
+                    </h4>
+                    <p className="text-xs text-ink-500 font-mono">
+                      Powered by OpenAI’s <code className="text-purple-700 font-bold">openai/gpt-image-2.5-flare</code>
+                    </p>
+                  </div>
+                </div>
+
+                <span className="localflow-badge-orange text-[10px] font-mono font-bold uppercase">
+                  Direct API
+                </span>
+              </div>
+
+              {/* No Vercel Needed Notice */}
+              <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 flex items-start gap-2.5">
+                <span className="text-base leading-none">💡</span>
+                <p className="leading-relaxed">
+                  <strong>No Vercel deployment needed!</strong> Your OpenRouter API key is stored safely right in this browser’s memory (<code className="font-mono text-[11px] bg-amber-100 px-1 py-0.5 rounded font-bold">localStorage</code>). It is never committed to Git and will stay active across sessions.
+                </p>
+              </div>
+
+              {/* API Key Input */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-mono font-bold uppercase text-ink-700 flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5 text-terracotta" />
+                    OpenRouter API Key:
+                  </label>
+                  {keyTestResult && (
+                    <span className={`text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${
+                      keyTestResult.valid
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                        : 'bg-rose-50 text-rose-700 border-rose-300'
+                    }`}>
+                      {keyTestResult.valid ? '✅ ' : '❌ '}{keyTestResult.message}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      placeholder="sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxx..."
+                      value={openRouterApiKey}
+                      onChange={(e) => handleUpdateApiKey(e.target.value)}
+                      className="w-full text-xs font-mono bg-canvas border-2 border-ink-900/30 rounded-xl px-3 py-2.5 pr-10 focus:outline-none focus:border-terracotta"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      className="absolute right-2.5 top-2.5 text-ink-500 hover:text-ink-900"
+                      title={showApiKey ? 'Hide key' : 'Show key'}
+                    >
+                      {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleTestApiKey}
+                    disabled={isTestingKey || !openRouterApiKey.trim()}
+                    className="localflow-btn-secondary text-xs px-3.5 py-2 flex items-center gap-1.5 font-mono flex-shrink-0"
+                  >
+                    {isTestingKey ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Testing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        <span>Test Key</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-ink-500 font-mono">
+                  Get your OpenRouter API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="text-terracotta underline font-bold">openrouter.ai/keys</a>
+                </p>
+              </div>
+
+              {/* Model Selector */}
+              <div className="space-y-2">
+                <label className="text-xs font-mono font-bold uppercase text-ink-700 block">
+                  Model Selection:
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateModel('openai/gpt-image-2.5-flare')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border transition-all flex items-center gap-1.5 ${
+                      openRouterModel === 'openai/gpt-image-2.5-flare'
+                        ? 'bg-purple-600 text-white border-ink-900 shadow-sm'
+                        : 'bg-canvas border-ink-900/20 text-ink-700 hover:border-ink-900'
+                    }`}
+                  >
+                    <span>⚡ gpt-image-2.5-flare</span>
+                    <span className="text-[10px] opacity-80">(Speed Tier / Recommended)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleUpdateModel('openai/gpt-image-2.5-sunburst')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border transition-all flex items-center gap-1.5 ${
+                      openRouterModel === 'openai/gpt-image-2.5-sunburst'
+                        ? 'bg-purple-600 text-white border-ink-900 shadow-sm'
+                        : 'bg-canvas border-ink-900/20 text-ink-700 hover:border-ink-900'
+                    }`}
+                  >
+                    <span>🎨 gpt-image-2.5-sunburst</span>
+                    <span className="text-[10px] opacity-80">(High Precision)</span>
+                  </button>
+                </div>
+
+                <input
+                  type="text"
+                  value={openRouterModel}
+                  onChange={(e) => handleUpdateModel(e.target.value)}
+                  placeholder="Custom model ID (e.g. openai/gpt-image-2.5-flare)"
+                  className="w-full text-xs font-mono bg-canvas border border-ink-900/30 rounded-lg px-3 py-2 mt-1 focus:outline-none focus:border-terracotta"
+                />
+              </div>
+
+              {/* Auto-Transform New Arrivals Switch */}
+              <div className="p-4 rounded-xl border-2 border-ink-900/20 bg-canvas space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-mono font-bold uppercase text-ink-900 flex items-center gap-1.5">
+                      <Zap className={`w-3.5 h-3.5 ${autoTransformEnabled ? 'text-amber-500 fill-amber-500' : 'text-ink-400'}`} />
+                      Auto-Transform New Arrivals
+                    </span>
+                    <p className="text-xs text-ink-600 leading-tight">
+                      Automatically sends every incoming mobile photo to OpenRouter and reveals it on the TV screen without manual clicking.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleToggleAutoTransform(!autoTransformEnabled)}
+                    className={`px-4 py-2 rounded-xl text-xs font-mono font-bold border-2 transition-all flex items-center gap-2 shadow-brutal-sm ${
+                      autoTransformEnabled
+                        ? 'bg-emerald-600 text-white border-ink-900'
+                        : 'bg-white text-ink-700 border-ink-900/30 hover:border-ink-900'
+                    }`}
+                  >
+                    <Power className="w-3.5 h-3.5" />
+                    <span>{autoTransformEnabled ? 'AUTOMATION ACTIVE' : 'OFF (MANUAL)'}</span>
+                  </button>
+                </div>
+
+                <p className="text-[11px] font-mono text-ink-500 italic">
+                  * Off by default. When OFF, you can still transform any photo on demand using the <strong>"⚡ 1-Click AI Transform"</strong> button on the desk.
+                </p>
+              </div>
+            </div>
+
+            {/* DATA MANAGEMENT CARD */}
             <div className="localflow-card p-5 space-y-3 bg-white">
               <h4 className="font-serif text-base font-bold text-ink-900 border-b border-ink-900/10 pb-2">
                 Data Management
