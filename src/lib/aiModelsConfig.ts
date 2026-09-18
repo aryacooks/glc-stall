@@ -50,6 +50,22 @@ export const OPENROUTER_MODEL_TIERS: AIModelTier[] = [
     bestFor: 'The festival kiosk sweet spot! Preserves guest facial identity and likeness while heavily transforming background and attire.',
     accentColor: '#8B5CF6', // Purple
   },
+  {
+    level: 3,
+    id: 'meta/muse-image',
+    name: 'Meta Muse Image',
+    shortName: 'muse-image',
+    tierLabel: 'Level 3: Meta Muse (Agentic Reasoning)',
+    costPerImage: 0.010,
+    costDisplay: '$0.010 / img',
+    accuracyRating: '⭐⭐⭐⭐ Smart Composition',
+    accuracyScore: 94,
+    speedDisplay: '⚡ Agentic Refinement',
+    latencySeconds: '~3 - 5 sec',
+    description: 'Meta Superintelligence Labs agentic image model. Reasons before rendering with multi-step chain-of-thought and intelligent reference styling.',
+    bestFor: 'Creative guest transformations, intelligent prompt comprehension, and multi-element scene adaptation (~1.0 cent per photo).',
+    accentColor: '#EC4899', // Pink / Magenta
+  },
 ];
 
 export function getModelTierByLevel(level: number): AIModelTier {
@@ -64,6 +80,7 @@ export function estimateCostForModel(modelId: string): number {
   const tier = getModelTierById(modelId);
   if (tier) return tier.costPerImage;
   if (modelId.includes('mini') || modelId.includes('lite')) return 0.008;
+  if (modelId.includes('muse')) return 0.010;
   if (modelId.includes('pro') || modelId.includes('plus')) return 0.040;
   return 0.015;
 }
