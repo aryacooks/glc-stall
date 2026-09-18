@@ -90,7 +90,34 @@ export async function POST(req: Request) {
       photo.rawPhotoUrl = await uploadBase64ToSupabase(photo.rawPhotoUrl, filename);
     }
 
-    // 2. Try inserting into Supabase DB table
+    // 2. Ensure unique sequential ticketNumber if missing or duplicate
+    if (supabaseAdmin) {
+      try {
+        const { data: existing } = await supabaseAdmin
+          .from('nexora_photos')
+          .select('id, ticketNumber');
+
+        const isDuplicate = existing?.some(
+          (p: any) => p.ticketNumber === photo.ticketNumber && p.id !== photo.id
+        );
+
+        if (!photo.ticketNumber || isDuplicate) {
+          let maxNum = 100;
+          existing?.forEach((p: any) => {
+            const match = p.ticketNumber?.match(/NEX-(\d+)/i);
+            if (match) {
+              const num = parseInt(match[1], 10);
+              if (!isNaN(num) && num > maxNum) maxNum = num;
+            }
+          });
+          photo.ticketNumber = `NEX-${maxNum + 1}`;
+        }
+      } catch (seqErr) {
+        console.warn('Sequence validation notice:', seqErr);
+      }
+    }
+
+    // 3. Try inserting into Supabase DB table
     if (supabaseAdmin) {
       try {
         const { error } = await supabaseAdmin

@@ -2471,7 +2471,7 @@ export default function OperatorDashboard() {
 
             {/* RECENT GENERATIONS LEDGER TABLE */}
             <div className="localflow-card p-6 bg-white border-2 border-ink-900 shadow-brutal space-y-4">
-              <div className="flex items-center justify-between border-b border-ink-900/10 pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-ink-900/10 pb-3 gap-2">
                 <div>
                   <h4 className="font-serif text-lg font-bold text-ink-900">
                     Generation Ledger & Audit Trail
@@ -2480,9 +2480,26 @@ export default function OperatorDashboard() {
                     Per-photo generation audit showing exact billed/estimated API fee.
                   </p>
                 </div>
-                <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-ink-900/10 text-ink-800">
-                  {transformedPhotosList.length} Records
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    Total: ${totalStallCost.toFixed(3)}
+                  </span>
+                  <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-ink-900/10 text-ink-800">
+                    {transformedPhotosList.length} Records
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      StorageService.syncLocalToCloud().then(refreshPhotos);
+                      showNotification('Tickets verified and synced across database!');
+                    }}
+                    className="p-1.5 rounded-lg border border-ink-900/20 hover:border-ink-900 text-ink-600 hover:text-ink-900 text-xs font-mono flex items-center gap-1"
+                    title="Re-verify tickets and sync with database"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Sync</span>
+                  </button>
+                </div>
               </div>
 
               {transformedPhotosList.length === 0 ? (
@@ -2502,6 +2519,7 @@ export default function OperatorDashboard() {
                         <th className="p-2.5">Guest</th>
                         <th className="p-2.5">Style / Persona</th>
                         <th className="p-2.5">Model Used</th>
+                        <th className="p-2.5">Time</th>
                         <th className="p-2.5 text-right">API Fee</th>
                         <th className="p-2.5 text-right">Action</th>
                       </tr>
@@ -2513,9 +2531,19 @@ export default function OperatorDashboard() {
                           ? photo.apiCost
                           : estimateCostForModel(photo.modelUsed || openRouterModel);
                         const modelName = photo.modelUsed || openRouterModel;
+                        const timeStr = photo.updatedAt || photo.createdAt
+                          ? new Date(photo.updatedAt || photo.createdAt).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : '—';
                         return (
                           <tr key={photo.id} className="hover:bg-canvas/60 transition-colors">
-                            <td className="p-2.5 font-bold text-ink-900">{photo.ticketNumber}</td>
+                            <td className="p-2.5 font-bold text-ink-900">
+                              <span className="px-1.5 py-0.5 rounded bg-ink-900/5 border border-ink-900/20">
+                                {photo.ticketNumber}
+                              </span>
+                            </td>
                             <td className="p-2.5 font-semibold">{photo.guestName}</td>
                             <td className="p-2.5">
                               <span className="px-1.5 py-0.5 rounded border text-[10px]" style={{
@@ -2527,9 +2555,12 @@ export default function OperatorDashboard() {
                               </span>
                             </td>
                             <td className="p-2.5">
-                              <span className="text-[10px] text-purple-900 bg-purple-100 px-1.5 py-0.5 rounded border border-purple-200">
+                              <span className="text-[10px] text-purple-900 bg-purple-100 px-1.5 py-0.5 rounded border border-purple-200 font-mono">
                                 {modelName.split('/').pop()}
                               </span>
+                            </td>
+                            <td className="p-2.5 text-ink-500 text-[11px]">
+                              {timeStr}
                             </td>
                             <td className="p-2.5 text-right font-bold text-emerald-800">
                               ${fee.toFixed(3)}

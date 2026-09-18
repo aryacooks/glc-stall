@@ -60,14 +60,79 @@ export const StorageService = {
         const stored = localStorage.getItem(STORAGE_KEY);
         if (stored) {
           localCache = JSON.parse(stored);
-          return localCache;
+          return this.repairTicketSequences(localCache);
         }
       } catch (err) {
         console.error('Error reading from localStorage', err);
       }
     }
 
-    return localCache;
+    return this.repairTicketSequences(localCache);
+  },
+
+  // Deduplicate and repair any duplicate tickets (e.g. multiple historical NEX-101s)
+  repairTicketSequences(list: GuestPhoto[]): GuestPhoto[] {
+    if (!list || list.length === 0) return list;
+
+    const seenTickets = new Set<string>();
+    let hasRepairs = false;
+
+    // Find the highest valid ticket number
+    let maxNum = 100;
+    for (const p of list) {
+      if (p.ticketNumber) {
+        const match = p.ticketNumber.match(/NEX-(\d+)/i);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxNum) maxNum = num;
+        }
+      }
+    }
+
+    // Sort chronologically from oldest to newest
+    const chronological = [...list].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+    for (const p of chronological) {
+      if (!p.ticketNumber || seenTickets.has(p.ticketNumber)) {
+        hasRepairs = true;
+        maxNum += 1;
+        p.ticketNumber = `NEX-${maxNum}`;
+        p.updatedAt = Date.now();
+
+        // Update in Supabase asynchronously
+        if (isSupabaseConfigured && supabase) {
+          supabase
+            .from('nexora_photos')
+            .update({ ticketNumber: p.ticketNumber })
+            .eq('id', p.id)
+            .then();
+        }
+      }
+      seenTickets.add(p.ticketNumber);
+    }
+
+    if (hasRepairs && typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+      } catch {}
+    }
+
+    return list;
+  },
+
+  // Calculate next sequential ticket number from existing list
+  getNextTicketNumber(list: GuestPhoto[]): string {
+    let maxNum = 100;
+    for (const p of list) {
+      if (p.ticketNumber) {
+        const match = p.ticketNumber.match(/NEX-(\d+)/i);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxNum) maxNum = num;
+        }
+      }
+    }
+    return `NEX-${maxNum + 1}`;
   },
 
   // Auto-sync any orphaned local photos to Supabase so Incognito and other devices see them
@@ -109,20 +174,20 @@ export const StorageService = {
     }
   },
 
-  // Save new incoming photo from guest mobile
+  // Save new incoming photo from guest mobile or desk
   async createPhoto(entry: {
     guestName: string;
     styleId: GuestPhoto['styleId'];
     rawPhotoUrl: string;
   }): Promise<GuestPhoto> {
-    ticketSequence += 1;
-    const ticketNumber = `NEX-${ticketSequence}`;
+    const currentPhotos = await this.getAllPhotos();
+    const ticketNumber = this.getNextTicketNumber(currentPhotos);
     const id = `photo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     const newPhoto: GuestPhoto = {
       id,
       ticketNumber,
-      guestName: entry.guestName.trim() || `Guest #${ticketSequence}`,
+      guestName: entry.guestName.trim() || `Guest #${ticketNumber.replace('NEX-', '')}`,
       styleId: entry.styleId,
       rawPhotoUrl: entry.rawPhotoUrl,
       status: 'queued',
