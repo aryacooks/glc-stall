@@ -5,7 +5,7 @@ import {
   Users, Sparkles, Copy, Check, ArrowRight, Play, RefreshCw, 
   Tv, MonitorPlay, Image as ImageIcon, Upload, FileText, CheckCircle2,
   Clock, Flame, Layers, ExternalLink, Sliders, AlertCircle, Settings,
-  Palette, Camera, X, Clipboard, Plus, Trash2
+  Palette, Camera, X, Clipboard, Plus, Trash2, Download
 } from 'lucide-react';
 import { getAllThemes, getStyleById, saveCustomTheme, deleteCustomTheme } from '@/lib/stylesConfig';
 import { GuestPhoto, PhotoStatus, EraStyleId, StyleEra, StyleCategory } from '@/lib/types';
@@ -18,6 +18,7 @@ export default function OperatorDashboard() {
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null);
   const [copiedPhotoId, setCopiedPhotoId] = useState<string | null>(null);
+  const [isCopyingPhoto, setIsCopyingPhoto] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
@@ -157,40 +158,142 @@ export default function OperatorDashboard() {
     }
   };
 
+  // Convert any image URL (data URL or Supabase remote URL) safely to a PNG Blob without canvas tainting
+  const urlToPngBlob = async (photoUrl: string): Promise<Blob> => {
+    let rawBlob: Blob;
+    if (photoUrl.startsWith('data:')) {
+      const parts = photoUrl.split(',');
+      const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+      const bstr = atob(parts[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      rawBlob = new Blob([u8arr], { type: mime });
+    } else {
+      const res = await fetch(photoUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status} fetching photo`);
+      rawBlob = await res.blob();
+    }
+
+    if (rawBlob.type === 'image/png') {
+      return rawBlob;
+    }
+
+    // Modern browsers: createImageBitmap from in-memory blob is fast and NEVER taints the canvas
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const bitmap = await createImageBitmap(rawBlob);
+        const canvas = document.createElement('canvas');
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(bitmap, 0, 0);
+          const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+          if (pngBlob) return pngBlob;
+        }
+      } catch (bitmapErr) {
+        console.warn('createImageBitmap conversion failed, falling back to same-origin ObjectURL:', bitmapErr);
+      }
+    }
+
+    // Fallback: Object URL is local same-origin (blob:http://...) and will never taint the canvas
+    return new Promise<Blob>((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(rawBlob);
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('Canvas 2D context unavailable'));
+            return;
+          }
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob((pngBlob) => {
+            URL.revokeObjectURL(objectUrl);
+            if (pngBlob) {
+              resolve(pngBlob);
+            } else {
+              reject(new Error('Failed to create PNG blob from canvas'));
+            }
+          }, 'image/png');
+        } catch (err) {
+          URL.revokeObjectURL(objectUrl);
+          reject(err);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('Image failed to load from Blob URL'));
+      };
+      img.src = objectUrl;
+    });
+  };
+
   // 1-Click Copy Raw Photo to OS Clipboard for Cmd+V in ChatGPT
   const handleCopyPhoto = async (photoUrl: string, id: string) => {
+    setIsCopyingPhoto(true);
     try {
-      const res = await fetch(photoUrl);
-      const blob = await res.blob();
-      
-      let pngBlob = blob;
-      if (blob.type !== 'image/png') {
-        const img = new Image();
-        img.src = photoUrl;
-        await new Promise((resolve) => { img.onload = resolve; });
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0);
-        const dataUri = canvas.toDataURL('image/png');
-        const pngRes = await fetch(dataUri);
-        pngBlob = await pngRes.blob();
+      // 1. Convert to PNG Blob safely without canvas tainting
+      const pngBlob = await urlToPngBlob(photoUrl);
+
+      // 2. Write to system clipboard using ClipboardItem
+      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': pngBlob }),
+          ]);
+          setCopiedPhotoId(id);
+          showNotification('Photo copied to clipboard! Switch to ChatGPT and press Cmd+V');
+          setTimeout(() => setCopiedPhotoId(null), 3000);
+          return;
+        } catch (clipErr: any) {
+          console.warn('Direct clipboard.write failed, falling back to local blob download:', clipErr);
+        }
       }
 
-      await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': pngBlob }),
-      ]);
-      setCopiedPhotoId(id);
-      showNotification('Photo copied to clipboard! Switch to ChatGPT & press Cmd+V');
-      setTimeout(() => setCopiedPhotoId(null), 2500);
-    } catch (err) {
-      console.warn('ClipboardItem write failed, fallback download', err);
+      // Safe Fallback: If clipboard write is blocked by browser policy, download file locally via blob URL
+      // (NEVER navigates or redirects the page to Supabase!)
+      const blobUrl = URL.createObjectURL(pngBlob);
       const a = document.createElement('a');
-      a.href = photoUrl;
-      a.download = `nexora-${selectedPhoto?.ticketNumber || 'guest'}.jpg`;
+      a.href = blobUrl;
+      a.download = `nexora-${selectedPhoto?.ticketNumber || 'guest'}.png`;
+      document.body.appendChild(a);
       a.click();
-      showNotification('Downloaded photo file for ChatGPT.');
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+      showNotification('Clipboard access restricted. Photo downloaded directly as PNG.');
+    } catch (err: any) {
+      console.error('Error copying photo:', err);
+      showNotification(`Failed to copy photo: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setIsCopyingPhoto(false);
+    }
+  };
+
+  // Dedicated direct file download helper (always uses local blob URL, never opens Supabase URL)
+  const handleDownloadPhoto = async (photoUrl: string, ticketNumber?: string) => {
+    try {
+      const pngBlob = await urlToPngBlob(photoUrl);
+      const blobUrl = URL.createObjectURL(pngBlob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `nexora-${ticketNumber || 'guest'}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
+      showNotification(`Downloaded photo for ${ticketNumber || 'guest'}`);
+    } catch (err) {
+      console.error('Download error:', err);
+      showNotification('Could not download photo file.');
     }
   };
 
@@ -1044,22 +1147,39 @@ export default function OperatorDashboard() {
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => handleCopyPhoto(selectedPhoto.rawPhotoUrl, selectedPhoto.id)}
-                        className="w-full localflow-btn-primary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5 font-mono"
-                      >
-                        {copiedPhotoId === selectedPhoto.id ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-white" />
-                            Copied! Press Cmd+V in ChatGPT
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            1. Copy Photo
-                          </>
-                        )}
-                      </button>
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => handleCopyPhoto(selectedPhoto.rawPhotoUrl, selectedPhoto.id)}
+                          disabled={isCopyingPhoto}
+                          className="flex-1 localflow-btn-primary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5 font-mono"
+                          title="Copy photo directly to OS clipboard for Cmd+V in ChatGPT"
+                        >
+                          {copiedPhotoId === selectedPhoto.id ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-white" />
+                              <span>Copied! Cmd+V in ChatGPT</span>
+                            </>
+                          ) : isCopyingPhoto ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              <span>Copying...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>1. Copy Photo</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          onClick={() => handleDownloadPhoto(selectedPhoto.rawPhotoUrl, selectedPhoto.ticketNumber)}
+                          className="localflow-btn-secondary p-2.5 text-xs flex items-center justify-center font-mono hover:bg-canvas-hover"
+                          title="Save photo file to disk"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     {/* CENTER: MATCHING PROMPT */}
