@@ -22,6 +22,11 @@ export default function OperatorDashboard() {
   const [activeTab, setActiveTab] = useState<'queue' | 'usage' | 'prompts' | 'settings'>('queue');
   const [photos, setPhotos] = useState<GuestPhoto[]>([]);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+  const selectedPhotoIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedPhotoIdRef.current = selectedPhotoId;
+  }, [selectedPhotoId]);
   const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null);
   const [copiedPhotoId, setCopiedPhotoId] = useState<string | null>(null);
   const [isCopyingPhoto, setIsCopyingPhoto] = useState(false);
@@ -60,18 +65,18 @@ export default function OperatorDashboard() {
   const autoTransformEnabledRef = useRef(false);
   const processedAutoPhotoIdsRef = useRef<Set<string>>(new Set());
 
-  // Add New Theme Form State
+  // Direct Desk Upload Modal State
+  const [showDirectUploadModal, setShowDirectUploadModal] = useState(false);
+  const [directGuestName, setDirectGuestName] = useState('');
+  const [directSelectedStyle, setDirectSelectedStyle] = useState<EraStyleId>('char_panicked_ceo');
+  const [directPhotoImg, setDirectPhotoImg] = useState<string | null>(null);
+  const [isDirectSubmitting, setIsDirectSubmitting] = useState(false);
+
+  // Add Theme / Persona Modal State
+  const [showAddThemeModal, setShowAddThemeModal] = useState(false);
   const [newThemeName, setNewThemeName] = useState('');
   const [newThemeTagline, setNewThemeTagline] = useState('');
   const [newThemePrompt, setNewThemePrompt] = useState('');
-  const [showAddThemeModal, setShowAddThemeModal] = useState(false);
-
-  // Direct Desk Capture Modal
-  const [showDirectUploadModal, setShowDirectUploadModal] = useState(false);
-  const [directPhotoImg, setDirectPhotoImg] = useState<string | null>(null);
-  const [directGuestName, setDirectGuestName] = useState('');
-  const [directSelectedStyle, setDirectSelectedStyle] = useState<string>('1980s');
-  const [isDirectSubmitting, setIsDirectSubmitting] = useState(false);
 
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -85,9 +90,17 @@ export default function OperatorDashboard() {
   const refreshPhotos = async () => {
     const list = await StorageService.getAllPhotos();
     setPhotos(list);
-    if (!selectedPhotoId && list.length > 0) {
-      setSelectedPhotoId(list[0].id);
-    }
+    setSelectedPhotoId((curr) => {
+      // If the user has clicked an old photo that still exists in the queue, NEVER revert it!
+      if (curr && list.some((p) => p.id === curr)) {
+        selectedPhotoIdRef.current = curr;
+        return curr;
+      }
+      // If nothing was selected or the photo was deleted, default to the first
+      const nextId = list.length > 0 ? list[0].id : null;
+      selectedPhotoIdRef.current = nextId;
+      return nextId;
+    });
   };
 
   useEffect(() => {
@@ -127,7 +140,10 @@ export default function OperatorDashboard() {
       if (event.type === 'PHOTO_QUEUED') {
         showNotification(`New guest arrived: ${event.payload.guestName} (${event.payload.ticketNumber})`);
         refreshPhotos();
-        setSelectedPhotoId(event.payload.id);
+        setSelectedPhotoId((curr) => {
+          if (curr) return curr;
+          return event.payload.id;
+        });
 
         // Immediately push newly taken photo to TV exhibition screen!
         StorageService.broadcastEvent({
@@ -403,6 +419,7 @@ export default function OperatorDashboard() {
 
   const handleSelectPhoto = (photo: GuestPhoto) => {
     setSelectedPhotoId(photo.id);
+    selectedPhotoIdRef.current = photo.id;
     // Immediately project selected photo onto TV exhibition screen
     StorageService.broadcastEvent({
       type: 'DISPLAY_FORCE_VIEW',
