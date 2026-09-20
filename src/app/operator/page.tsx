@@ -650,19 +650,55 @@ export default function OperatorDashboard() {
     }
   };
 
-  // Dedicated direct file download helper (always uses local blob URL, never opens Supabase URL)
-  const handleDownloadPhoto = async (photoUrl: string, ticketNumber?: string) => {
+  // Dedicated direct file download helper (always downloads the file locally, never opens URL in new tab)
+  const handleDownloadPhoto = async (photoUrl: string, filenameLabel?: string) => {
     try {
+      const cleanName = filenameLabel ? filenameLabel.replace(/[^a-zA-Z0-9-_]/g, '_') : 'photo';
+      const filename = `nexora-${cleanName}.png`;
+
+      // 1. Instant download for base64 data URLs
+      if (photoUrl.startsWith('data:')) {
+        const a = document.createElement('a');
+        a.href = photoUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        showNotification(`Downloaded: ${filename}`);
+        return;
+      }
+
+      // 2. For remote URLs (Supabase / CDN), fetch blob to guarantee local download
+      try {
+        const res = await fetch(photoUrl);
+        if (res.ok) {
+          const blob = await res.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+          showNotification(`Downloaded: ${filename}`);
+          return;
+        }
+      } catch (fetchErr) {
+        console.warn('Direct fetch failed, falling back to urlToPngBlob:', fetchErr);
+      }
+
+      // 3. Fallback via canvas / blob converter
       const pngBlob = await urlToPngBlob(photoUrl);
       const blobUrl = URL.createObjectURL(pngBlob);
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = `nexora-${ticketNumber || 'guest'}.png`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
-      showNotification(`Downloaded photo for ${ticketNumber || 'guest'}`);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+      showNotification(`Downloaded: ${filename}`);
     } catch (err) {
       console.error('Download error:', err);
       showNotification('Could not download photo file.');
@@ -1410,15 +1446,31 @@ export default function OperatorDashboard() {
                           </div>
                         </div>
 
-                        {/* Delete Button on Queue Card */}
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeletePhoto(photo.id, e)}
-                          className="p-1.5 rounded-lg text-ink-400 hover:text-rose-600 hover:bg-rose-50 transition-colors flex-shrink-0"
-                          title={`Delete ${photo.ticketNumber}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {/* Queue Card Action Buttons */}
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          {photo.transformedPhotoUrl && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDownloadPhoto(photo.transformedPhotoUrl!, `${photo.ticketNumber}-${photo.guestName}-output`);
+                              }}
+                              className="p-1.5 rounded-lg text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 transition-colors"
+                              title={`Download ${photo.ticketNumber} output image`}
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeletePhoto(photo.id, e)}
+                            className="p-1.5 rounded-lg text-ink-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                            title={`Delete ${photo.ticketNumber}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     );
                   })
@@ -1468,6 +1520,19 @@ export default function OperatorDashboard() {
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {/* Download Output Image */}
+                      {selectedPhoto.transformedPhotoUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPhoto(selectedPhoto.transformedPhotoUrl!, `${selectedPhoto.ticketNumber}-${selectedPhoto.guestName}-output`)}
+                          className="localflow-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1.5 font-mono text-emerald-800 border-emerald-400 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-600 transition-colors shadow-xs"
+                          title="Download transformed output image to computer"
+                        >
+                          <Download className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="font-bold">Download Output</span>
+                        </button>
+                      )}
+
                       {/* Auto-AI Quick Switch Pill */}
                       <button
                         type="button"
@@ -1756,15 +1821,24 @@ export default function OperatorDashboard() {
 
                         {selectedPhoto.transformedPhotoUrl ? (
                           <div className="space-y-2">
-                            <div className="relative aspect-[3/4] w-full rounded-lg overflow-hidden border-2 border-emerald-600 bg-ink-900 shadow-xs">
+                            <div className="relative aspect-[3/4] w-full rounded-lg overflow-hidden border-2 border-emerald-600 bg-ink-900 shadow-xs group">
                               <img
                                 src={selectedPhoto.transformedPhotoUrl}
                                 alt="Transformed Branded"
                                 className="w-full h-full object-cover"
                               />
-                              <div className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">
+                              <div className="absolute top-2 right-2 bg-emerald-600 text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded shadow-xs">
                                 ✓ Ready
                               </div>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadPhoto(selectedPhoto.transformedPhotoUrl!, `${selectedPhoto.ticketNumber}-${selectedPhoto.guestName}-output`)}
+                                className="absolute bottom-2 right-2 bg-ink-900/85 hover:bg-ink-900 text-white text-[10px] font-mono font-bold px-2 py-1 rounded-lg border border-white/20 shadow-brutal-sm flex items-center gap-1 transition-all hover:scale-105"
+                                title="Download output image"
+                              >
+                                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>Save PNG</span>
+                              </button>
                             </div>
                             {typeof selectedPhoto.apiCost === 'number' && selectedPhoto.apiCost > 0 && (
                               <div className="flex items-center justify-between px-2.5 py-1.5 rounded bg-amber-50 border border-amber-300 text-amber-950 font-mono text-[11px] shadow-xs">
@@ -1805,22 +1879,59 @@ export default function OperatorDashboard() {
                       </div>
 
                       <div className="flex gap-2">
-                        <button
-                          onClick={handlePasteFromClipboardButton}
-                          className="flex-1 localflow-btn-secondary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5 font-mono"
-                          title="Paste image directly from clipboard"
-                        >
-                          <Clipboard className="w-3.5 h-3.5 text-terracotta" />
-                          Paste Clipboard
-                        </button>
+                        {selectedPhoto.transformedPhotoUrl ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadPhoto(selectedPhoto.transformedPhotoUrl!, `${selectedPhoto.ticketNumber}-${selectedPhoto.guestName}-output`)}
+                              className="flex-1 localflow-btn-primary bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 px-3 text-xs flex items-center justify-center gap-1.5 font-mono shadow-brutal-sm transition-all"
+                              title="Download output image file"
+                            >
+                              <Download className="w-4 h-4" />
+                              <span>Download Image</span>
+                            </button>
 
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="localflow-btn-secondary p-2 text-xs flex items-center justify-center"
-                          title="Upload file from computer"
-                        >
-                          <Upload className="w-3.5 h-3.5" />
-                        </button>
+                            <button
+                              type="button"
+                              onClick={handlePasteFromClipboardButton}
+                              className="localflow-btn-secondary py-2.5 px-2.5 text-xs flex items-center justify-center gap-1 font-mono"
+                              title="Paste image directly from clipboard"
+                            >
+                              <Clipboard className="w-3.5 h-3.5 text-terracotta" />
+                              <span>Paste</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className="localflow-btn-secondary p-2.5 text-xs flex items-center justify-center"
+                              title="Upload file from computer"
+                            >
+                              <Upload className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={handlePasteFromClipboardButton}
+                              className="flex-1 localflow-btn-secondary py-2.5 px-2 text-xs flex items-center justify-center gap-1.5 font-mono"
+                              title="Paste image directly from clipboard"
+                            >
+                              <Clipboard className="w-3.5 h-3.5 text-terracotta" />
+                              Paste Clipboard
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className="localflow-btn-secondary p-2 text-xs flex items-center justify-center"
+                              title="Upload file from computer"
+                            >
+                              <Upload className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
 
                       <input
@@ -2608,16 +2719,29 @@ export default function OperatorDashboard() {
                               {fee !== null ? `$${fee < 0.01 ? fee.toFixed(4) : fee.toFixed(3)}` : <span className="text-ink-400 font-normal">—</span>}
                             </td>
                             <td className="p-2.5 text-right">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  handleSelectPhoto(photo);
-                                  setActiveTab('queue');
-                                }}
-                                className="px-2 py-1 rounded text-[10px] font-bold bg-white border border-ink-900/30 hover:border-ink-900 text-ink-800"
-                              >
-                                View on Desk →
-                              </button>
+                              <div className="flex items-center justify-end gap-1.5">
+                                {photo.transformedPhotoUrl && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDownloadPhoto(photo.transformedPhotoUrl!, `${photo.ticketNumber}-${photo.guestName}-output`)}
+                                    className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1 transition-colors"
+                                    title="Download output image"
+                                  >
+                                    <Download className="w-3 h-3 text-emerald-600" />
+                                    <span>Download</span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleSelectPhoto(photo);
+                                    setActiveTab('queue');
+                                  }}
+                                  className="px-2 py-1 rounded text-[10px] font-bold bg-white border border-ink-900/30 hover:border-ink-900 text-ink-800"
+                                >
+                                  View on Desk →
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );

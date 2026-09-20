@@ -566,7 +566,51 @@ export default function DisplayPage() {
                 <div className="mt-2 text-center flex items-center justify-between px-1 text-[10px] font-mono text-[#6B6B6B]">
                   <span>{activePhoto.ticketNumber}</span>
                   <span className="font-bold text-[#1E1E1E]">{activePhoto.guestName}</span>
-                  <span>{currentEra.name}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span>{currentEra.name}</span>
+                    {activePhoto.transformedPhotoUrl && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const url = activePhoto.transformedPhotoUrl!;
+                          const cleanName = `${activePhoto.ticketNumber}-${activePhoto.guestName}-output`.replace(/[^a-zA-Z0-9-_]/g, '_');
+                          const filename = `nexora-${cleanName}.png`;
+                          if (url.startsWith('data:')) {
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = filename;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            return;
+                          }
+                          try {
+                            const res = await fetch(url);
+                            const blob = await res.blob();
+                            const blobUrl = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = blobUrl;
+                            a.download = filename;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+                          } catch {
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = filename;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                          }
+                        }}
+                        className="p-1 rounded bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 transition-colors shadow-xs"
+                        title="Download revealed output image"
+                      >
+                        <Download className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
