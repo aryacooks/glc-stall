@@ -818,15 +818,6 @@ export default function OperatorDashboard() {
     showNotification('✨ Transition triggered! Watch the pixels fall on the TV screen!');
   };
 
-  // Fast prototype mock simulation
-  const handleSimulateTransform = async () => {
-    if (!selectedPhoto) return;
-    setIsProcessing(true);
-
-    const demoImg = selectedEra.demoTransformed;
-    await processOutputImage(demoImg);
-    setIsProcessing(false);
-  };
 
   // Reset TV to idle
   const handleResetTv = () => {
@@ -1555,16 +1546,6 @@ export default function OperatorDashboard() {
                       >
                         <Trash2 className="w-3.5 h-3.5 text-rose-600" />
                         <span>Delete</span>
-                      </button>
-
-                      <button
-                        onClick={handleSimulateTransform}
-                        disabled={isProcessing}
-                        className="localflow-btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 font-mono text-terracotta border-terracotta hover:bg-terracotta-light"
-                        title="Simulate transformation in 2 seconds"
-                      >
-                        <Sparkles className="w-3.5 h-3.5 text-terracotta" />
-                        {isProcessing ? 'Simulating...' : '1-Click Demo'}
                       </button>
                     </div>
                   </div>
